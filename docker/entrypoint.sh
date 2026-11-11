@@ -27,6 +27,12 @@ if [ ! -x "$AGY" ]; then
   [ -x "$AGY" ] || { echo "agy install failed" >&2; exit 1; }
 fi
 
+# Unlock gates (1M context, 192KB clamp removal) in official agy CLI binary
+if [ -f "/app/scripts/agy-patch.py" ] && [ -x "$AGY" ]; then
+  echo "==> unlocking context window & token clamp gates on $AGY..."
+  python3 /app/scripts/agy-patch.py --binary "$AGY" --in-place 2>/dev/null || true
+fi
+
 # gateway.env holds defaults; values given to the container (docker-compose environment:) win
 while IFS= read -r line; do
   case "$line" in ''|'#'*) continue ;; esac

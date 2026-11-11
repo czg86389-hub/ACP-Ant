@@ -11,7 +11,7 @@ ENV PYTHONUNBUFFERED=1 \
     AGY_PORT=8095
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl procps \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --uid 1000 --shell /bin/bash acpant
 

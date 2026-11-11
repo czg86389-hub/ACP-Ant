@@ -42,6 +42,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+try:
+    from json_repair import repair_json
+except ImportError:
+    repair_json = None
 import logging
 import os
 import re
@@ -96,6 +100,8 @@ DEFAULT_MODEL = os.environ.get("AGY_DEFAULT_MODEL", "gemini-3.8-flash-medium")
 MODEL_FALLBACK = _env_bool("AGY_MODEL_FALLBACK", True)         # unknown model name -> DEFAULT_MODEL instead of an error
 MAX_IMAGES = _env_int("AGY_MAX_IMAGES", 10)                    # images per request (the most recent ones are kept)
 FETCH_IMAGES = _env_bool("AGY_FETCH_IMAGES", True)             # download http(s) image URLs sent by clients
+MAX_PROMPT_CHARS = _env_int("AGY_MAX_PROMPT_CHARS", 130000)        # prompt budget per turn; avoids agy's ~184KB tail truncation
+MAX_TOOL_RESULT_CHARS = _env_int("AGY_MAX_TOOL_RESULT_CHARS", 25000) # clamp individual oversized tool outputs
 # One long-lived `agy acp` per account serving all its sessions: session/new takes ~0.02 s instead of ~2 s with
 # --process-per-session (which starts a new worker for every request). Set 1 to go back to a process per session.
 PROCESS_PER_SESSION = _env_bool("AGY_PROCESS_PER_SESSION", False)
@@ -202,12 +208,13 @@ _BLOCK_TEXT = re.compile(r"^\s*The prompt could not be submitted|Generative AI P
 #   "⚠ API error (attempt 1): RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota)."
 #   ... "⚠ Agent execution terminated due to error."
 _APIERR_TEXT = re.compile(r"^\s*⚠\s*(?:API error \(attempt \d+\):\s*([^\n]+)\n|Agent execution terminated due to error)")
+_NETWORK_TEXT = re.compile(r"^\s*⚠?\s*There was a network issue connecting to the server", re.I)
 
 
 # Every canned reply above starts with one of these. As soon as the answer clearly starts with something else it is
 # streamed out right away instead of being held back (first token arrives with the model's first chunk).
 _CANNED_STARTS = ("⚠", "the prompt could not be submitted", "your prompt contains sensitive words", "prompt contains sensitive words",
-                  "verification required", "verify your account")
+                  "verification required", "verify your account", "there was a network issue")
 
 
 def could_be_canned(text: str) -> bool:
@@ -222,6 +229,8 @@ def soft_error(text: str) -> AcpError | None:
         return AcpError("blocked by Antigravity's prompt filter: " + head[:200], "BLOCKED")
     if _VERIFY_TEXT.search(head):
         return AcpError("account must be verified with Google: " + head[:120].strip(), "VERIFY")
+    if _NETWORK_TEXT.search(head):
+        return AcpError("Antigravity upstream network issue: " + head[:120].strip(), "RATE_LIMIT")
     m = _APIERR_TEXT.search(head)
     if m:
         msg = (m.group(1) or "agent execution terminated").strip()
@@ -250,7 +259,7 @@ def classify(message: str) -> str:
         return "QUOTA"
     if re.search(r"rate.?limit|429|too many requests|overloaded|capacity|unavailable|503", m):
         return "RATE_LIMIT"
-    if re.search(r"timeout|timed out|deadline", m):
+    if re.search(r"timeout|timed out|deadline|network issue|connection reset|handshake", m):
         return "TIMEOUT"
     if re.search(r"safety|blocked|prohibited|recitation", m):
         return "BLOCKED"
@@ -1439,11 +1448,41 @@ def _calls_block(calls: list[dict]) -> str:
     arr = []
     for c in calls:
         try:
-            args = json.loads(c["arguments"]) if isinstance(c["arguments"], str) else c["arguments"]
-        except ValueError:
+            args = json.loads(c["arguments"], strict=False) if isinstance(c["arguments"], str) else c["arguments"]
+        except (ValueError, TypeError):
             args = c["arguments"]
         arr.append({"name": c["name"], "arguments": args})
     return "<tool_calls>\n" + json.dumps(arr, ensure_ascii=False) + "\n</tool_calls>"
+
+
+def _clamp_part(p: dict, max_chars: int) -> dict:
+    if p.get("type") == "tool_result":
+        t = p.get("text") or ""
+        if len(t) > max_chars:
+            half = max(500, (max_chars - 100) // 2)
+            clamped = f"{t[:half]}\n\n... [output truncated ({len(t)} chars) by gateway] ...\n\n{t[-half:]}"
+            return {**p, "text": clamped}
+    return p
+
+
+def _clamp_msg(m: dict, max_chars: int) -> dict:
+    parts = m.get("parts") or []
+    if any(p.get("type") == "tool_result" and len(p.get("text") or "") > max_chars for p in parts):
+        return {**m, "parts": [_clamp_part(p, max_chars) for p in parts]}
+    return m
+
+
+def _estimate_msg_chars(m: dict) -> int:
+    chars = 15
+    for p in m.get("parts") or []:
+        pt = p.get("type")
+        if pt == "text":
+            chars += len(p.get("text") or "")
+        elif pt == "tool_result":
+            chars += len(p.get("text") or "") + len(p.get("name") or "") + 40
+        elif pt == "tool_call":
+            chars += len(p.get("arguments") or "") + len(p.get("name") or "") + 40
+    return chars
 
 
 def to_acp(system: str, msgs: list[dict], tools: list[dict], choice: Any, extra_system: str = "", parallel: bool = True) -> tuple[str, list[dict]]:
@@ -1461,7 +1500,28 @@ def to_acp(system: str, msgs: list[dict], tools: list[dict], choice: Any, extra_
     while k > 0 and msgs[k - 1]["role"] != "assistant":
         k -= 1
     history, current = msgs[:k], msgs[k:]
-    n_img = sum(1 for m in msgs for p in m["parts"] if p["type"] == "image")
+
+    # Protect current turn from being eclipsed: clamp oversized tool outputs and calculate budget
+    current = [_clamp_msg(m, MAX_TOOL_RESULT_CHARS) for m in current]
+    current_est = sum(_estimate_msg_chars(m) for m in current)
+    history_budget = max(0, MAX_PROMPT_CHARS - current_est - 500)
+
+    # Prune history from newest to oldest if total exceeds budget
+    history_kept = []
+    consumed = 0
+    history_omitted = False
+
+    for m in reversed(history):
+        m_clamped = _clamp_msg(m, MAX_TOOL_RESULT_CHARS)
+        m_chars = _estimate_msg_chars(m_clamped)
+        if consumed + m_chars <= history_budget:
+            history_kept.append(m_clamped)
+            consumed += m_chars
+        else:
+            history_omitted = True
+
+    history = list(reversed(history_kept))
+    n_img = sum(1 for m in (history + current) for p in m["parts"] if p["type"] == "image")
     skip = max(0, n_img - MAX_IMAGES)       # drop the oldest images beyond the limit
     blocks: list[dict] = []
 
@@ -1515,6 +1575,8 @@ def to_acp(system: str, msgs: list[dict], tools: list[dict], choice: Any, extra_
 
     if history:
         text("<conversation_history>")
+        if history_omitted:
+            text("\n[... earlier conversation history omitted to stay within token budget ...]\n")
         for m in history:
             render(m, True)
         text("\n</conversation_history>\n\n" + ("The latest input for this turn:\n" if current else
@@ -1603,29 +1665,32 @@ async def fetch_remote_images(msgs: list[dict]) -> None:
 # ======================================================================================================
 
 TAG_OPEN, TAG_CLOSE = "<tool_calls>", "</tool_calls>"
+ALT_OPEN, ALT_CLOSE = "<function_calls>", "</function_calls>"
+OPEN_TAGS = (TAG_OPEN, "<tool_call>", ALT_OPEN)
 
 
 def _loads_lenient(s: str) -> Any:
     s = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", s.strip())
     try:
-        return json.loads(s)
-    except ValueError:
+        return json.loads(s, strict=False)
+    except Exception:
         pass
     for a, b in (("[", "]"), ("{", "}")):
         i, j = s.find(a), s.rfind(b)
         if 0 <= i < j:
             try:
-                return json.loads(s[i:j + 1])
-            except ValueError:
+                return json.loads(s[i:j + 1], strict=False)
+            except Exception:
                 continue
+    if repair_json is not None:
+        try:
+            return json.loads(repair_json(s), strict=False)
+        except Exception:
+            pass
     return None
 
 
 # Claude-family models sometimes fall back to their own XML tool format; accept it too.
-ALT_OPEN, ALT_CLOSE = "<function_calls>", "</function_calls>"
-OPEN_TAGS = (TAG_OPEN, ALT_OPEN)
-
-
 def _parse_invokes(body: str) -> list[dict]:
     calls = []
     for m in re.finditer(r'<invoke name="([^"]+)">(.*?)(?:</invoke>|$)', body, re.S):
@@ -1636,7 +1701,7 @@ def _parse_invokes(body: str) -> list[dict]:
             v = v[:-1] if v.endswith("\n") else v
             if v.strip()[:1] in ("{", "[") or v.strip() in ("true", "false", "null") or re.fullmatch(r"-?\d+(\.\d+)?", v.strip()):
                 try:
-                    args[p.group(1)] = json.loads(v)
+                    args[p.group(1)] = json.loads(v, strict=False)
                     continue
                 except ValueError:
                     pass
@@ -1647,16 +1712,24 @@ def _parse_invokes(body: str) -> list[dict]:
 
 def parse_tool_calls(text: str) -> tuple[str, list[dict] | None]:
     """Split the model's reply into (text before the block, [{"name", "arguments"(dict|str)}]) or (text, None)."""
-    i = text.find(TAG_OPEN)
-    if i < 0:
+    tag_open, tag_close = None, None
+    i = -1
+    for topen, tclose in ((TAG_OPEN, TAG_CLOSE), ("<tool_call>", "</tool_call>")):
+        pos = text.find(topen)
+        if pos >= 0 and (i < 0 or pos < i):
+            i = pos
+            tag_open, tag_close = topen, tclose
+
+    if i < 0 or tag_open is None or tag_close is None:
         k = text.find(ALT_OPEN)
         if k >= 0:
             calls = _parse_invokes(text[k:])
             if calls:
                 return re.sub(r"\n?```[a-zA-Z]*\s*$", "", text[:k]).rstrip(), calls
         return text, None
-    body = text[i + len(TAG_OPEN):]
-    j = body.find(TAG_CLOSE)
+
+    body = text[i + len(tag_open):]
+    j = body.find(tag_close)
     if j >= 0:
         body = body[:j]
     data = _loads_lenient(body)
@@ -1671,9 +1744,13 @@ def parse_tool_calls(text: str) -> tuple[str, list[dict] | None]:
         args = next((c[k] for k in ("arguments", "input", "parameters", "args") if k in c), f.get("arguments", {}))
         if isinstance(args, str):
             try:
-                args = json.loads(args) if args.strip() else {}
+                args = json.loads(args, strict=False) if args.strip() else {}
             except ValueError:
-                pass   # leave the raw string; the client will see what the model wrote
+                if repair_json is not None:
+                    try:
+                        args = json.loads(repair_json(args), strict=False)
+                    except Exception:
+                        pass
         if name:
             calls.append({"name": str(name), "arguments": args if args is not None else {}})
     if not calls:
