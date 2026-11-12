@@ -614,17 +614,6 @@ async def api_overview(request: Request):
     require(request)
     core.POOL.scan()
     accs = [account_view(a) for a in core.POOL.accounts.values()]
-    # accounts that have no quota yet: fetch in the background so the next refresh shows it
-    for a in core.POOL.accounts.values():
-        if a.quota is None and not getattr(a, "_quota_loading", False):
-            setattr(a, "_quota_loading", True)
-
-            async def _load(acc=a):
-                try:
-                    await quota_check(acc, record=False)
-                finally:
-                    setattr(acc, "_quota_loading", False)
-            asyncio.create_task(_load())
     today = {"ok": 0, "fail": 0, "in": 0, "out": 0}
     for a in accs:
         for k in today:
@@ -701,11 +690,17 @@ async def api_check(name: str, request: Request):
     require(request, True)
     acc = get_account(name)
     body = await body_of(request)
-    # enable_if_ok only comes from the add-account wizard; also treat it as light so a panel page opened before 1.4.2
-    # (old script, no "light" flag) still does not send a test prompt
-    if body.get("light") or body.get("enable_if_ok"):
-        # step 3 of "add account": only read the quota (agy -p /usage, sends no prompt and costs no quota) to prove
-        # the login works; the owner runs the real test afterwards
+    # ponytail: the login flow already validates credentials; quota is an explicit action, not an add-account gate.
+    # Keep old panel pages (enable_if_ok + light) on the same no-quota path.
+    if body.get("enable_if_ok"):
+        ok, _ = await logged_in(acc.home)
+        res = {"ok": ok, "message": "登录正常，额度可在账号卡片上手动刷新" if ok else "登录尚未完成，请重新登录"}
+        if ok:
+            acc.last_check_at = time.time()     # defer the regular patrol until its normal interval
+            acc.last_check_ok, acc.last_check_msg = True, res["message"]
+        core.event("info" if ok else "warn", name, "添加账号：" + res["message"])
+    elif body.get("light"):
+        # Explicit lightweight check; never used to gate adding an account.
         t0 = time.time()
         q = await quota_check(acc)
         if isinstance(q, list):
@@ -718,7 +713,8 @@ async def api_check(name: str, request: Request):
     if res["ok"] and not acc.enabled and body.get("enable_if_ok"):
         _set_enabled(acc.home, True)
         acc.enabled = True
-        core.event("info", name, "检测通过，已开启")
+        core.POOL.wake()
+        core.event("info", name, "登录确认，已开启")
     return {**res, "account": account_view(acc)}
 
 
@@ -1071,6 +1067,9 @@ def _silent_sync_files_sync() -> bool:
     """后台静默同步远端最新 panel.html 与 README.md（不通知、不中断服务），并检测 git 仓库是否有新提交。"""
     info = install_info()
     src = str(info.get("src") or "")
+    # ponytail: unmanaged installs keep local fixes; use a managed git install for automatic file sync.
+    if not src:
+        return False
     for fname in ("panel.html", "README.md"):
         try:
             remote_txt = _fetch_text(UPDATE_URL + "/" + fname)

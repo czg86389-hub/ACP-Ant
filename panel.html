@@ -111,7 +111,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
     <div class="grid" id="accounts"></div>
     <h2>最近事件</h2>
     <div class="card events" id="events"></div>
-    <p class="mute small" style="margin-top:14px">每 10 秒自动刷新。额度每 10 分钟缓存一次，点「刷新额度」立即重读（读取额度不消耗额度）。</p>
+    <p class="mute small" style="margin-top:14px">每 10 秒自动刷新。添加账号后不自动读取额度，点「刷新额度」手动读取（不消耗额度）；定时巡检按设置执行。</p>
     <p class="mute small">ACP-Ant · 开源项目</p>
   </main>
 </div>
@@ -182,7 +182,7 @@ function render() {
 
 function quotaHtml(a) {
   if (a.quota_error) return '<div class="row err small">读取额度失败：' + esc(a.quota_error) + "</div>";
-  if (!a.quota) return '<div class="row mute small"><span class="spin"></span> 正在读取额度…</div>';
+  if (!a.quota) return '<div class="row mute small">尚未读取额度，点击「刷新额度」查看。</div>';
   return a.quota.map(g => '<div class="qg"><b>' + esc(GROUP[g.group] || g.group) + "</b>" + g.buckets.map(b => {
     const p = Math.max(0, Math.min(100, Math.round((b.remaining ?? 0) * 1000) / 10));
     const cls = p > 50 ? "" : p > 20 ? "mid" : "low";
@@ -281,7 +281,7 @@ function deleteModal(name) {
 
 // ---------- add account / login wizard
 function nextName() { const used = new Set((DATA?.accounts || []).map(a => a.name)); for (let i = 1; i < 200; i++) if (!used.has("g" + i)) return "g" + i; return "g" + Date.now(); }
-function steps(i) { return '<div class="steps">' + ["1 账号信息", "2 登录 Google", "3 检测"].map((s, k) => '<span class="' + (k === i ? "on" : "") + '">' + s + "</span>").join("") + "</div>"; }
+function steps(i) { return '<div class="steps">' + ["1 账号信息", "2 登录 Google", "3 完成"].map((s, k) => '<span class="' + (k === i ? "on" : "") + '">' + s + "</span>").join("") + "</div>"; }
 
 function addModal() {
   $("#modal").dataset.sticky = "1";
@@ -363,10 +363,10 @@ function loginModal(name, wizard) {
 }
 
 function checkStep(name) {
-  openModal('<h3>添加账号 ' + esc(name) + '</h3>' + steps(2) + '<p id="ckMsg"><span class="spin"></span> 正在读取这个账号的额度，确认登录正常（不发测试消息，约 5–20 秒）…</p><div class="foot"><button id="ckDone">完成</button></div>');
+  openModal('<h3>添加账号 ' + esc(name) + '</h3>' + steps(2) + '<p id="ckMsg"><span class="spin"></span> 正在确认登录并完成添加（不读取额度、不发测试消息）…</p><div class="foot"><button id="ckDone">完成</button></div>');
   $("#ckDone").onclick = () => { delete $("#modal").dataset.sticky; closeModal(); refresh(); };
   api("/accounts/" + name + "/check", {body: {enable_if_ok: true, light: true}}).then(r => {
-    if (r.ok) $("#ckMsg").innerHTML = '<span style="color:var(--ok)">✔ 登录正常，已经开启。</span><br><span class="small mute">没有发测试消息；要真发一句话试，可以在账号卡片上点「检测」。</span>';
+    if (r.ok) $("#ckMsg").innerHTML = '<span style="color:var(--ok)">✔ 登录正常，已经开启。</span><br><span class="small mute">未自动读取额度；点击账号卡片上的「刷新额度」即可查看。要真发一句话试，可以点「检测」。</span>';
     else if (r.verify_url) $("#ckMsg").innerHTML = '<span class="err">Google 要求验证这个账号。</span> <a href="' + esc(r.verify_url) + '" target="_blank" rel="noopener">打开验证页面</a>，验证完在账号卡片上点「检测」，再打开开关。';
     else $("#ckMsg").innerHTML = '<span class="err">' + esc(r.message) + "</span><br>账号先保持关闭，处理好后在卡片上点「检测」，再打开开关。";
     refresh();

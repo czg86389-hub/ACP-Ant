@@ -118,7 +118,7 @@ cat data/panel-initial-password.txt     # 面板初始密码（可能要 sudo）
 - **开关**：每个账号右上角一个开关，关掉后这个账号不会再被调用（文件 `accounts/<名字>/disabled`），打开立即恢复。
 - **按钮**：检测（真发一句话；Google 要求验证时直接给出验证链接）、刷新额度、重新登录、换代理、清除冷却、删除。
 - **添加账号向导**：填名字和代理 → 自动测出口 IP（同一 IP 被别的账号用过会提醒）→ 点按钮打开 Google 登录页，
-  把授权码或落地页网址粘贴回面板 → 自动读取一次额度确认登录正常（不发测试消息、不耗额度），通过后自动开启；要真发一句话试，在账号卡片上点「检测」。登录全程在你自己的浏览器里完成，面板只转交授权码，不保存。
+  把授权码或落地页网址粘贴回面板 → 确认登录正常后自动开启，不自动读取额度、不发测试消息；要查看额度，在账号卡片上点「刷新额度」；要真发一句话试，在账号卡片上点「检测」。登录全程在你自己的浏览器里完成，面板只转交授权码，不保存。
 - **用 refresh_token 登录**：已经有这个 Google 账号的 refresh_token（例如从 Antigravity 账号管理工具里导出的），
   在「添加账号」里切到 Refresh Token 标签页直接粘贴（单独的 token，或者含 `refresh_token` 的整段 JSON 都行），不用再开浏览器。
   见下文「用 refresh_token 添加账号」。
@@ -348,6 +348,7 @@ Anthropic 格式下，「没有可用账号」返回 529（overloaded），Claud
 - `python3 /opt/acp-ant/smoke_test.py [图片路径] [并发数]`：冒烟测试（短回复、系统提示词、读图、并发）。
 - `python3 /opt/acp-ant/agent_test.py [模型名]`：Agent 相关测试（三种接口的工具调用、流式、JSON 模式）。
 - `HOME=/opt/acp-ant/accounts/g1 HTTPS_PROXY=<代理地址> python3 /opt/acp-ant/acp_probe.py --prompt "Reply with OK"`：直接和 `agy acp` 握手，打印协议往来（看账号有哪些模型和思考档位）。
+- 在源码目录里 `/opt/acp-ant/venv/bin/python scripts/quota_flow_test.py`：离线测试添加账号不自动查额度、手动刷新、登录校验和巡检间隔，不需要账号或网络。
 - 在源码目录里 `/opt/acp-ant/venv/bin/python scripts/content_test.py`：离线测试（不用账号、不联网），检查视频 / 音频 / PDF 等会返回 400、文字和图片照常通过。
 - `/opt/acp-ant/venv/bin/python scripts/video_mode_test.py`：视频模式的离线测试（同样不用账号、不联网）。
 - 日志：`journalctl -u acp-ant -f`；每个账号的 `agy` 日志在 `accounts/<名字>/gw/`。
