@@ -363,10 +363,10 @@ function loginModal(name, wizard) {
 }
 
 function checkStep(name) {
-  openModal('<h3>添加账号 ' + esc(name) + '</h3>' + steps(2) + '<p id="ckMsg"><span class="spin"></span> 正在用这个账号真发一句话测试（约 10–30 秒）…</p><div class="foot"><button id="ckDone">完成</button></div>');
+  openModal('<h3>添加账号 ' + esc(name) + '</h3>' + steps(2) + '<p id="ckMsg"><span class="spin"></span> 正在读取这个账号的额度，确认登录正常（不发测试消息，约 5–20 秒）…</p><div class="foot"><button id="ckDone">完成</button></div>');
   $("#ckDone").onclick = () => { delete $("#modal").dataset.sticky; closeModal(); refresh(); };
-  api("/accounts/" + name + "/check", {body: {enable_if_ok: true}}).then(r => {
-    if (r.ok) $("#ckMsg").innerHTML = '<span style="color:var(--ok)">✔ 账号可以用了，已经开启。</span>';
+  api("/accounts/" + name + "/check", {body: {enable_if_ok: true, light: true}}).then(r => {
+    if (r.ok) $("#ckMsg").innerHTML = '<span style="color:var(--ok)">✔ 登录正常，已经开启。</span><br><span class="small mute">没有发测试消息；要真发一句话试，可以在账号卡片上点「检测」。</span>';
     else if (r.verify_url) $("#ckMsg").innerHTML = '<span class="err">Google 要求验证这个账号。</span> <a href="' + esc(r.verify_url) + '" target="_blank" rel="noopener">打开验证页面</a>，验证完在账号卡片上点「检测」，再打开开关。';
     else $("#ckMsg").innerHTML = '<span class="err">' + esc(r.message) + "</span><br>账号先保持关闭，处理好后在卡片上点「检测」，再打开开关。";
     refresh();

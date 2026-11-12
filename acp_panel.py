@@ -700,8 +700,20 @@ async def api_quota_all(request: Request):
 async def api_check(name: str, request: Request):
     require(request, True)
     acc = get_account(name)
-    res = await check_account(acc)
-    if res["ok"] and not acc.enabled and (await body_of(request)).get("enable_if_ok"):
+    body = await body_of(request)
+    if body.get("light"):
+        # step 3 of "add account": only read the quota (agy -p /usage, sends no prompt and costs no quota) to prove
+        # the login works; the owner runs the real test afterwards
+        t0 = time.time()
+        q = await quota_check(acc)
+        if isinstance(q, list):
+            res = {"ok": True, "message": "登录正常，读到额度（%.0f 秒，没有发测试消息）" % (time.time() - t0)}
+        else:
+            res = {"ok": False, "message": acc.last_check_msg or "读取额度失败"}
+        core.event("info" if res["ok"] else "warn", name, "检测（只读额度）：" + res["message"])
+    else:
+        res = await check_account(acc)
+    if res["ok"] and not acc.enabled and body.get("enable_if_ok"):
         _set_enabled(acc.home, True)
         acc.enabled = True
         core.event("info", name, "检测通过，已开启")
