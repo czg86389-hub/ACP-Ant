@@ -701,7 +701,9 @@ async def api_check(name: str, request: Request):
     require(request, True)
     acc = get_account(name)
     body = await body_of(request)
-    if body.get("light"):
+    # enable_if_ok only comes from the add-account wizard; also treat it as light so a panel page opened before 1.4.2
+    # (old script, no "light" flag) still does not send a test prompt
+    if body.get("light") or body.get("enable_if_ok"):
         # step 3 of "add account": only read the quota (agy -p /usage, sends no prompt and costs no quota) to prove
         # the login works; the owner runs the real test afterwards
         t0 = time.time()
