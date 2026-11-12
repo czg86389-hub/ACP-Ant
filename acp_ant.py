@@ -60,7 +60,7 @@ from typing import Any, AsyncIterator
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-__version__ = "1.4.4"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
+__version__ = "1.4.5"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
 
 log = logging.getLogger("acp-ant")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -94,7 +94,9 @@ KEEP_HOURS = float(os.environ.get("AGY_KEEP_HOURS", "6"))      # delete local co
 REQUIRE_PROXY = _env_bool("AGY_REQUIRE_PROXY", False)   # since 1.4.0 a proxy is optional; set 1 to insist on one per account
 DEFAULT_MODEL = os.environ.get("AGY_DEFAULT_MODEL", "gemini-3.8-flash-medium")
 MODEL_FALLBACK = _env_bool("AGY_MODEL_FALLBACK", True)         # unknown model name -> DEFAULT_MODEL instead of an error
-MAX_IMAGES = _env_int("AGY_MAX_IMAGES", 10)                    # images per request (the most recent ones are kept)
+MAX_IMAGES = _env_int("AGY_MAX_IMAGES", 200)                   # images per request. Measured 2026-11-12: Gemini 3.8 Flash
+#   saw all of 200 numbered images in order; 250 made Antigravity stop with "agent execution terminated". Images of the
+#   latest message are never dropped (more than this is a 400); only older turns' images give way, oldest first.
 FETCH_IMAGES = _env_bool("AGY_FETCH_IMAGES", True)             # download http(s) image URLs sent by clients
 # One long-lived `agy acp` per account serving all its sessions: session/new takes ~0.02 s instead of ~2 s with
 # --process-per-session (which starts a new worker for every request). Set 1 to go back to a process per session.
@@ -202,6 +204,9 @@ _BLOCK_TEXT = re.compile(r"^\s*The prompt could not be submitted|Generative AI P
 #   "⚠ API error (attempt 1): RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota)."
 #   ... "⚠ Agent execution terminated due to error."
 _APIERR_TEXT = re.compile(r"^\s*⚠\s*(?:API error \(attempt \d+\):\s*([^\n]+)\n|Agent execution terminated due to error)")
+# An account without an Antigravity licence gets this instead of an answer (seen 2026-11-12 on a newly added account):
+#   "⚠ You do not have a valid license of this product. Please contact your administrator ... (#3501)"
+_LICENSE_TEXT = re.compile(r"do not have a valid license|\(#3501\)", re.I)
 
 
 # Every canned reply above starts with one of these. As soon as the answer clearly starts with something else it is
@@ -229,6 +234,12 @@ def soft_error(text: str) -> AcpError | None:
         # account. UPSTREAM_LIMIT = try one more account without cooling this one down; the real quota is checked.
         kind = classify(msg)
         return AcpError("Antigravity upstream error: " + msg[:200], "UPSTREAM_LIMIT" if kind in ("QUOTA", "RATE_LIMIT") else kind)
+    if head.lstrip().startswith("⚠"):
+        # Antigravity's own status lines all start with ⚠ ("⚠ Model produced invalid output.", ...). Whatever the
+        # wording, it is not the model's answer: never hand it to the caller, try another account instead.
+        if _LICENSE_TEXT.search(head):
+            return AcpError("this account has no valid Antigravity licence (#3501): " + head.strip()[:160], "LICENSE")
+        return AcpError("Antigravity status message instead of an answer: " + head.strip()[:200], "SERVER")
     return None
 
 
@@ -994,6 +1005,8 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
                 acc.disabled_reason = "needs a new login: " + str(e)[:120]
             elif e.kind == "CONFIG":
                 acc.disabled_reason = str(e)[:160]
+            elif e.kind == "LICENSE":
+                acc.disabled_reason = "no valid Antigravity licence (#3501)"   # log in again, or replace the account
             elif e.kind == "TRANSPORT" and acc.acp:
                 await acc.acp.stop()
             elif e.kind == "UPSTREAM_LIMIT":
@@ -1462,7 +1475,12 @@ def to_acp(system: str, msgs: list[dict], tools: list[dict], choice: Any, extra_
         k -= 1
     history, current = msgs[:k], msgs[k:]
     n_img = sum(1 for m in msgs for p in m["parts"] if p["type"] == "image")
-    skip = max(0, n_img - MAX_IMAGES)       # drop the oldest images beyond the limit
+    n_now = sum(1 for m in current for p in m["parts"] if p["type"] == "image")
+    if n_now > MAX_IMAGES:
+        # never drop images the caller is asking about right now: say so instead (it used to drop the oldest ones silently)
+        raise HTTPException(400, "too many images in the latest message: %d (this gateway takes at most %d images per "
+                                 "request, AGY_MAX_IMAGES)" % (n_now, MAX_IMAGES))
+    skip = max(0, n_img - MAX_IMAGES)       # only earlier turns' images give way (they are rendered first), oldest first
     blocks: list[dict] = []
 
     def text(t: str) -> None:
@@ -1475,7 +1493,7 @@ def to_acp(system: str, msgs: list[dict], tools: list[dict], choice: Any, extra_
         nonlocal skip
         if skip > 0:
             skip -= 1
-            text("[image omitted]")
+            text("[an earlier image was omitted: this gateway keeps the most recent %d images]" % MAX_IMAGES)
         else:
             blocks.append({"type": "image", "mimeType": p["mime"], "data": p["data"]})
 
@@ -1821,7 +1839,7 @@ async def with_heartbeat(events: AsyncIterator[str], ping: str = SSE_PING) -> As
 
 
 ERR_STATUS = {"QUOTA": 429, "RATE_LIMIT": 429, "UPSTREAM_LIMIT": 429, "NO_ACCOUNT": 503, "TIMEOUT": 504, "BLOCKED": 400, "UNKNOWN_MODEL": 400,
-              "BAD_REQUEST": 400, "AUTH": 503, "BUSY": 503}
+              "BAD_REQUEST": 400, "AUTH": 503, "LICENSE": 503, "BUSY": 503}
 
 
 def _wire_calls(calls: list[dict], prefix: str) -> list[dict]:

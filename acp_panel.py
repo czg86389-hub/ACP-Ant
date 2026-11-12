@@ -362,7 +362,17 @@ async def check_account(acc) -> dict:
     setattr(acc, "last_prompt_check", time.time())
     low = out.lower()
     res: dict[str, Any] = {"ok": False}
-    if re.search(r'"status"\s*:\s*"SUCCESS"', out):
+    try:
+        answer = str(json.loads(out.strip()).get("response") or "")
+    except ValueError:
+        answer = ""
+    soft = core.soft_error(answer) if answer else None   # agy says SUCCESS even when the "answer" is a ⚠ status line
+    if soft is not None and soft.kind == "LICENSE":
+        acc.disabled_reason = "no valid Antigravity licence (#3501)"
+        res = {"ok": False, "message": "这个号没有 Antigravity 使用许可（#3501）：重新登录试试，不行就换号"}
+    elif soft is not None and soft.kind != "VERIFY":
+        res = {"ok": False, "message": "出错了：" + ANSI.sub("", answer)[:240]}
+    elif re.search(r'"status"\s*:\s*"SUCCESS"', out) and soft is None:
         res = {"ok": True, "message": "正常（%.0f 秒）" % (time.time() - t0)}
         if acc.cooldown_kind == "VERIFY" or acc.disabled_reason:
             await restart_acp(acc)
@@ -550,6 +560,8 @@ def status_of(acc) -> tuple[str, str]:
         return "off", "已关闭"
     if acc.disabled_reason:
         r = acc.disabled_reason
+        if "#3501" in r:
+            return "error", "无使用许可（#3501）"
         return "error", "需要重新登录" if (AUTH_WORDS.search(r) or "登录" in r or "login" in r.lower()) else r[:40]
     if acc.cooldown_until > now:
         return {"VERIFY": ("verify", "需要 Google 验证"), "QUOTA": ("quota", "额度用完，冷却中"),
