@@ -53,7 +53,7 @@ import time
 import urllib.request
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, AsyncIterator
 
@@ -147,7 +147,7 @@ try:  # extra aliases: AGY_MODEL_ALIASES='{"fast": ["gemini-3.8-flash", "low"], 
 except (ValueError, TypeError, IndexError, AttributeError):
     log.warning("AGY_MODEL_ALIASES is not valid JSON of the form {\"name\": [\"model\", \"level\"]}; ignored")
 
-LEVELS = ("low", "medium", "high")
+LEVELS = ("low", "medium", "high", "xhigh")
 
 
 def resolve_model(name: str) -> tuple[str, str | None]:
@@ -159,10 +159,16 @@ def resolve_model(name: str) -> tuple[str, str | None]:
         if cand in MODEL_ALIASES:
             return MODEL_ALIASES[cand]
     base = re.sub(r"-(\d{8}|latest)$", "", name)
-    m = re.match(r"^(.+)-(high|medium|low)$", base)
+    m = re.match(r"^(.+)-(xhigh|high|medium|low)$", base)
     if m:
         return m.group(1), m.group(2)
     return base, None
+
+
+def config_values(opts: list, cid: str) -> tuple[dict | None, list[str]]:
+    """An ACP config option ("model", "thought_level") and the values it offers."""
+    opt = next((o for o in opts if o.get("id") == cid or o.get("category") == cid), None)
+    return opt, [str(o.get("value")) for o in (opt or {}).get("options") or []]
 
 
 AGENT_MD = """---
@@ -567,6 +573,11 @@ class AcpProcess:
                 return
             sess = await self.request("session/new", {"cwd": self.cwd, "mcpServers": []}, 120)
             if sess.get("sessionId"):
+                mopt, self.acc.models = config_values(sess.get("configOptions") or [], "model")
+                for m in self.acc.models:   # thought levels differ per model (Hydrogen adds xhigh); choosing one sends nothing
+                    if m not in POOL.model_levels:
+                        res = await self.request("session/set_config_option", {"sessionId": sess["sessionId"], "configId": (mopt or {}).get("id", "model"), "value": m}, 60)
+                        POOL.model_levels[m] = config_values(res.get("configOptions") or [], "thought_level")[1]
                 await self.request("session/close", {"sessionId": sess["sessionId"]}, 15)
         except Exception as e:  # noqa: BLE001
             log.info("account %s: prewarm skipped: %s", self.label, str(e)[:160])
@@ -610,6 +621,7 @@ class Account:
     last_check_ok: bool | None = None
     last_check_msg: str = ""
     verify_url: str = ""              # Google verification link from the last check, if any
+    models: list[str] = field(default_factory=list)   # model ids this account offers (free accounts get fewer)
     acp: AcpProcess | None = None
     media: AcpProcess | None = None   # video mode: second, sandboxed process (created on the first request with a file)
 
@@ -686,12 +698,16 @@ STATS = Stats(os.path.join(ROOT, "stats.json"))
 class Pool:
     def __init__(self) -> None:
         self.accounts: dict[str, Account] = {}
-        self.models_seen: list[str] = []      # model ids offered by Antigravity (learned from session/new)
-        self.levels_seen: list[str] = []      # thought levels offered
+        self.model_levels: dict[str, list[str]] = {}   # model id -> thought levels it offers
         self.limit = max(1, PER_ACCOUNT)      # concurrent requests per account
         self.waiting = 0                      # requests queued because every account is full
         self._cond: asyncio.Condition | None = None
         self._bg: set[asyncio.Task] = set()
+
+    @property
+    def models_seen(self) -> list[str]:
+        """Every model some switched-on account offers (learned from session/new, at start-up and on each request)."""
+        return list(dict.fromkeys(m for a in self.accounts.values() if a.enabled for m in a.models))
 
     def scan(self) -> None:
         """Every sub-directory of ACCOUNTS_DIR with a proxy.env (or, with AGY_REQUIRE_PROXY=0, a .gemini dir) is an account.
@@ -722,9 +738,12 @@ class Pool:
                 except RuntimeError:
                     pass
 
-    def pick(self, exclude: set[str]) -> Account | None:
+    def pick(self, exclude: set[str], wanted: frozenset = frozenset()) -> Account | None:
         self.scan()
         cands = [a for a in self.accounts.values() if a.usable() and a.name not in exclude]
+        # a model only some accounts have (paid ones) goes to those; any other account would answer with the default
+        if any(not wanted.isdisjoint(a.models) for a in self.accounts.values()):
+            cands = [a for a in cands if not wanted.isdisjoint(a.models)]
         if not cands:
             return None
         # least busy first; among equals the one unused for longest (real round-robin, quota spreads evenly)
@@ -736,7 +755,7 @@ class Pool:
             self._cond = asyncio.Condition()
         return self._cond
 
-    async def acquire(self, exclude: set[str], deadline: float) -> Account | None:
+    async def acquire(self, exclude: set[str], deadline: float, wanted: frozenset = frozenset()) -> Account | None:
         """A free slot on the least busy usable account. When every account is full the request queues, and whichever
         account frees a slot first takes the next one in line. None = no usable account left to try."""
         cond = self._condition()
@@ -744,7 +763,7 @@ class Pool:
             self.waiting += 1
             try:
                 while True:
-                    acc = self.pick(exclude)
+                    acc = self.pick(exclude, wanted)
                     if acc is None:
                         return None
                     if acc.inflight < self.limit:
@@ -861,10 +880,9 @@ async def _run_session(acp: AcpProcess, sess: dict, turn: Turn, model: str, effo
     """model / thought level -> prompt -> stream (kind, text); auto-continues after max_tokens."""
     sid = sess["sessionId"]
     opts = sess.get("configOptions") or []
-    mopt = next((o for o in opts if o.get("id") == "model" or o.get("category") == "model"), None)
-    offered = [str(o.get("value")) for o in (mopt or {}).get("options") or []]
+    mopt, offered = config_values(opts, "model")
     if offered:
-        POOL.models_seen = offered
+        acp.acc.models = offered
     if offered and model not in offered and effort and f"{model}-{effort}" in offered:
         model, effort = f"{model}-{effort}", None    # ids like "gpt-oss-120b-medium" carry the level in the name
     if offered and model not in offered:
@@ -879,10 +897,9 @@ async def _run_session(acp: AcpProcess, sess: dict, turn: Turn, model: str, effo
     if not mopt or mopt.get("currentValue") != model:
         res = await acp.request("session/set_config_option", {"sessionId": sid, "configId": (mopt or {}).get("id", "model"), "value": model}, 60)
         opts = res.get("configOptions") or opts
-    lopt = next((o for o in opts if o.get("id") == "thought_level" or o.get("category") == "thought_level"), None)
-    levels = [str(o.get("value")) for o in (lopt or {}).get("options") or []]
+    lopt, levels = config_values(opts, "thought_level")
     if levels:
-        POOL.levels_seen = levels
+        POOL.model_levels[model] = levels
     if effort and lopt and lopt.get("currentValue") != effort and (not levels or effort in levels):
         await acp.request("session/set_config_option", {"sessionId": sid, "configId": lopt.get("id", "thought_level"), "value": effort}, 60)
     prompt = blocks
@@ -955,14 +972,15 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
     """Pick an account and run; if it fails before any answer text was sent, try the next account.
     Yields (kind, text, account name); kind is "text", "thought" or "usage"."""
     model, effort = resolve_model(model_name)
-    if effort_override in LEVELS and not re.search(r"-(high|medium|low)$", model_name or ""):
+    if effort_override in LEVELS and not re.search(r"-(xhigh|high|medium|low)$", model_name or ""):
         effort = effort_override
+    wanted = frozenset((model, "%s-%s" % (model, effort)))
     deadline = time.time() + REQUEST_TIMEOUT
     tried: set[str] = set()
     last: AcpError | None = None
     upstream_fails = 0
     while time.time() < deadline:
-        acc = await POOL.acquire(tried, deadline)
+        acc = await POOL.acquire(tried, deadline, wanted)
         if acc is None:
             break
         tried.add(acc.name)
@@ -1020,7 +1038,7 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
                 raise
         finally:
             POOL.release(acc)
-    raise last or AcpError("no usable Antigravity account (all cooling down, logged out or disabled)", "NO_ACCOUNT")
+    raise last or AcpError("no usable Antigravity account for %s (all cooling down, logged out or disabled)" % model_name, "NO_ACCOUNT")
 
 
 # ======================================================================================================
@@ -2190,7 +2208,7 @@ async def models(request: Request):
     check_key(request)
     names = list(MODEL_ALIASES)
     for m in POOL.models_seen:
-        variants = [] if re.search(r"-(low|medium|high)$", m) else ["%s-%s" % (m, lv) for lv in (POOL.levels_seen or LEVELS)]
+        variants = [] if re.search(r"-(low|medium|high|xhigh)$", m) else ["%s-%s" % (m, lv) for lv in (POOL.model_levels.get(m) or LEVELS[:3])]
         for n in [m] + variants:
             if n not in names:
                 names.append(n)

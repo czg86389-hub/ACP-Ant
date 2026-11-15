@@ -200,6 +200,7 @@ class FakeAcp:
     def __init__(self, evil_path=""):
         self.turns, self.sessions, self.cwd, self.evil = {}, 0, "", evil_path
         self.seen = {}
+        self.acc = acc
 
     async def ensure(self):
         gw.prepare_media_home(home)

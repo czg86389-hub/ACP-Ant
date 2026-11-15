@@ -261,11 +261,12 @@ ACP 协议本身只能让 Antigravity 调用它自己那边的工具，不能把
 | `gemini-3.8-flash` | gemini-3.8-flash | 账号默认 |
 | `gemini-4-argon-high` / `gemini-4-argon` | gemini-4-argon | 高 / 账号默认 |
 
-- 不在表里的名字原样传给 Antigravity，结尾的 `-high` / `-medium` / `-low` 会自动当成思考档位。Antigravity 还提供 `claude-sonnet-5-5`、`claude-opus-5-5`、`gpt-oss-120b-medium` 等模型（以 `account.sh list` 显示的为准），也可以直接用。
-- `GET /v1/models` 会列出别名和账号实际提供的模型（网关处理过一次请求后才知道账号有哪些模型）。
+- 不在表里的名字原样传给 Antigravity，结尾的 `-xhigh` / `-high` / `-medium` / `-low` 会自动当成思考档位。Antigravity 还提供 `gemini-4-hydrogen`、`claude-sonnet-5-5`、`claude-opus-5-5`、`gpt-oss-120b-medium` 等模型（以 `account.sh list` 显示的为准），也可以直接用。
+- 不同账号能用的模型不一样（例如 `gemini-4-hydrogen`、`gemini-4-argon`、`claude-opus-5-5` 只有付费 Google AI Pro / Ultra 账号有）。网关启动和账号重新登录时会读取每个账号的模型清单（不消耗额度），只把请求派给有这个模型的账号；这些账号都不可用时直接报错，不会悄悄换成默认模型。
+- `GET /v1/models` 会列出别名和所有开启的账号实际提供的模型，每个模型带上它支持的思考档位（如 `gemini-4-hydrogen-xhigh`）。
 - Agent 请求了不存在的模型名，默认改用 `AGY_DEFAULT_MODEL`（`gemini-3.8-flash-medium`）；`AGY_MODEL_FALLBACK=0` 改为报错。
 - 自定义别名：`AGY_MODEL_ALIASES={"fast": ["gemini-3.8-flash", "low"]}`。
-- OpenAI 的 `reasoning_effort` / Responses 的 `reasoning.effort`（low / medium / high）会当作思考档位（模型名里已经写了档位的以模型名为准）。
+- OpenAI 的 `reasoning_effort` / Responses 的 `reasoning.effort`（low / medium / high / xhigh）会当作思考档位（模型名里已经写了档位的以模型名为准）。
 
 **速度**（服务器本机实测，gemini-3.8-flash-medium）：短回复首字约 1.3–2 秒；约 300 字的回答首字 6–9 秒；长文首字 8–10 秒，之后边生成边输出（每秒约 100 字）。
 首字主要花在模型先思考再输出上。网关做了两件事来压低延迟：
