@@ -5,124 +5,257 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ACP-Ant 控制面板</title>
 <style>
-:root{--bg:#0e1117;--panel:#161b24;--panel2:#1d2430;--line:#2a3342;--text:#e6e9ef;--mute:#8b95a7;--acc:#6aa8ff;--ok:#3ecf8e;--warn:#f5b84b;--bad:#ff6b6b;--off:#6b7280;--r:12px}
-@media (prefers-color-scheme: light){:root{--bg:#f4f6fa;--panel:#fff;--panel2:#f0f3f8;--line:#dde3ec;--text:#1b2230;--mute:#667085;--acc:#2f6fe4}}
+:root{color-scheme:dark;
+  --bg:#0b1120;--panel:#111a2c;--panel2:#18233a;--panel3:#223049;--line:rgba(148,163,184,.13);--line2:rgba(148,163,184,.24);
+  --text:#e2e8f0;--text2:#cbd5e1;--mute:#94a3b8;--faint:#7c8aa0;
+  --acc:#22c55e;--acc-ink:#052e16;--acc-soft:rgba(34,197,94,.12);--info:#60a5fa;
+  --ok:#22c55e;--warn:#f59e0b;--bad:#f87171;--off:#64748b;--ok-soft:rgba(34,197,94,.12);--warn-soft:rgba(245,158,11,.13);--bad-soft:rgba(248,113,113,.12);
+  --r:14px;--r-sm:9px;--shadow:0 1px 0 rgba(255,255,255,.03) inset,0 10px 30px -18px rgba(0,0,0,.7);
+  --sans:"Fira Sans","Inter",-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --mono:"Fira Code","JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace}
+@media (prefers-color-scheme: light){:root{color-scheme:light;
+  --bg:#f3f6fa;--panel:#fff;--panel2:#f1f5f9;--panel3:#e2e8f0;--line:rgba(15,23,42,.08);--line2:rgba(15,23,42,.15);
+  --text:#0f172a;--text2:#334155;--mute:#5b6b80;--faint:#64748b;
+  --acc:#15803d;--acc-ink:#fff;--acc-soft:rgba(21,128,61,.09);--info:#2563eb;
+  --ok:#16a34a;--warn:#b45309;--bad:#dc2626;--ok-soft:rgba(22,163,74,.1);--warn-soft:rgba(217,119,6,.1);--bad-soft:rgba(220,38,38,.08);
+  --shadow:0 1px 2px rgba(15,23,42,.04),0 6px 20px -12px rgba(15,23,42,.16)}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-a{color:var(--acc)}
-button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:8px;padding:6px 12px}
-button:hover{border-color:var(--acc)}
-button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;min-height:100vh;background:radial-gradient(1200px 500px at 15% -10%,var(--acc-soft),transparent 60%),var(--bg);color:var(--text);font:14px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--info);text-underline-offset:2px}
+svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+button{font:inherit;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:0 12px;
+  border:1px solid var(--line2);background:var(--panel);color:var(--text);border-radius:var(--r-sm);transition:background .15s,border-color .15s,color .15s,transform .15s;white-space:nowrap}
+button:hover{background:var(--panel2);border-color:var(--mute)}
+button:active{transform:translateY(1px)}
+button.primary{background:var(--acc);border-color:var(--acc);color:var(--acc-ink);font-weight:600}
+button.primary:hover{filter:brightness(1.08);background:var(--acc)}
+button.ghost{background:transparent;border-color:transparent;color:var(--text2)}
+button.ghost:hover{background:var(--panel2);border-color:var(--line)}
+button.icon{width:34px;padding:0}
 button.danger{color:var(--bad)}
-button:disabled{opacity:.5;cursor:default}
-input,select,textarea{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
-textarea{min-height:90px;resize:vertical}
-header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-header h1{font-size:17px;margin:0;font-weight:650}
-header .sp{flex:1}
-main{max-width:1400px;margin:0 auto;padding:18px}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:99px;font-size:12px;background:var(--panel2);border:1px solid var(--line);color:var(--mute)}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:var(--off)}
-.s-ok .dot,.dot.ok{background:var(--ok)}.s-warn .dot,.s-rate .dot,.s-quota .dot{background:var(--warn)}.s-verify .dot,.s-error .dot{background:var(--bad)}.s-off .dot{background:var(--off)}
-.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px}
-.big{font-size:22px;font-weight:650}.mute{color:var(--mute)}.small{font-size:12px}
-.banner{background:rgba(245,184,75,.12);border:1px solid var(--warn);border-radius:var(--r);padding:10px 14px;margin-bottom:14px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
-.acc h3{margin:0;font-size:16px}
-.acc .top{display:flex;align-items:center;gap:10px}
-.acc .top .sp{flex:1}
-.acc.off{opacity:.62}
-.row{margin-top:8px}
-.q{margin-top:6px}
-.qg{margin-top:8px}
-.qg b{font-weight:600;font-size:13px}
-.qb{display:grid;grid-template-columns:58px 1fr 46px;gap:8px;align-items:center;font-size:12px;margin-top:4px}
-.bar{height:8px;background:var(--panel2);border-radius:99px;overflow:hidden;border:1px solid var(--line)}
-.bar i{display:block;height:100%;background:var(--ok)}
-.bar i.mid{background:var(--warn)}.bar i.low{background:var(--bad)}
-.acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
-.acts button{padding:4px 10px;font-size:13px}
-.verify{margin-top:10px;border:1px solid var(--bad);background:rgba(255,107,107,.08);border-radius:8px;padding:8px 10px}
-.err{color:var(--bad);word-break:break-all}
-.switch{position:relative;width:44px;height:24px;flex:none}
-.switch input{opacity:0;width:0;height:0}
-.switch span{position:absolute;inset:0;background:var(--off);border-radius:99px;transition:.2s;cursor:pointer}
-.switch span:before{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
-.switch input:checked+span{background:var(--ok)}
-.switch input:checked+span:before{transform:translateX(20px)}
-h2{font-size:15px;margin:22px 0 10px}
-.events{max-height:360px;overflow:auto}
-.ev{display:grid;grid-template-columns:120px 70px 1fr;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:13px}
-.ev.warn .t{color:var(--warn)}
-.mask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;z-index:20;overflow:auto;padding:40px 12px}
-.modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(640px,100%);padding:18px 20px}
-.modal h3{margin:0 0 12px}
-.modal .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
-.field{margin-top:10px}
-.field label{display:block;font-size:13px;color:var(--mute);margin-bottom:4px}
-.tabs{display:flex;gap:6px;padding:4px;background:var(--bg);border:1px solid var(--line);border-radius:10px;margin-bottom:8px}
-.tabs button{flex:1;border:0;background:transparent;color:var(--mute);padding:8px;border-radius:8px}
-.tabs button.on{background:var(--panel2);color:var(--acc)}
-.steps{display:flex;gap:6px;margin-bottom:12px}
-.steps span{flex:1;text-align:center;font-size:12px;padding:4px;border-radius:6px;background:var(--panel2);color:var(--mute)}
-.steps span.on{background:var(--acc);color:#fff}
-code,pre{font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
-pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;white-space:pre-wrap;word-break:break-all}
-.kv{display:grid;grid-template-columns:110px 1fr auto;gap:8px;align-items:center;margin-top:8px}
+button.danger:hover{background:var(--bad-soft);border-color:var(--bad)}
+button:disabled{opacity:.55;cursor:not-allowed;transform:none}
+:focus-visible{outline:2px solid var(--info);outline-offset:2px}
+input,select,textarea{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line2);border-radius:var(--r-sm);padding:9px 11px;width:100%;transition:border-color .15s,box-shadow .15s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-soft)}
+input[type=checkbox]{width:16px;height:16px;padding:0;accent-color:var(--acc);vertical-align:-3px;margin:0 6px 0 0;cursor:pointer}
+textarea{min-height:96px;resize:vertical;font-family:var(--mono);font-size:12.5px}
+label{cursor:pointer}
+details summary{cursor:pointer;color:var(--mute)}
+.mute{color:var(--mute)}.faint{color:var(--faint)}.small{font-size:12px}
+.err{color:var(--bad);overflow-wrap:anywhere}
+.sp{flex:1}
+/* top bar */
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 22px;
+  background:color-mix(in srgb,var(--panel) 82%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px}
+.logo{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;color:#052e16;background:linear-gradient(135deg,#4ade80,#16a34a);box-shadow:0 4px 14px -4px rgba(34,197,94,.55)}
+.logo svg.i{width:20px;height:20px;stroke-width:2.2}
+.brand-name{font-weight:700;font-size:15px;letter-spacing:.2px;line-height:1.15}
+.brand-sub{font-size:11.5px;color:var(--faint);line-height:1.2}
+.toolbar{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.divider{width:1px;height:20px;background:var(--line2);margin:0 6px}
+main{max-width:1440px;margin:0 auto;padding:22px 22px 40px}
+/* pills & badges */
+.pill,.badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:99px;font-size:12px;font-weight:500;white-space:nowrap;
+  background:var(--panel2);border:1px solid var(--line);color:var(--mute)}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:var(--off);flex:none}
+.dot.ok{background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+.s-ok .dot{background:var(--ok)}.s-warn .dot,.s-rate .dot,.s-quota .dot{background:var(--warn)}.s-verify .dot,.s-error .dot{background:var(--bad)}.s-off .dot{background:var(--off)}
+.badge.s-ok{background:var(--ok-soft);border-color:transparent;color:var(--ok)}
+.badge.s-warn,.badge.s-rate,.badge.s-quota{background:var(--warn-soft);border-color:transparent;color:var(--warn)}
+.badge.s-verify,.badge.s-error{background:var(--bad-soft);border-color:transparent;color:var(--bad)}
+/* cards & KPI */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;box-shadow:var(--shadow)}
+.banner{display:flex;gap:10px;align-items:flex-start;background:var(--warn-soft);color:var(--text);border:1px solid color-mix(in srgb,var(--warn) 45%,transparent);border-radius:var(--r);padding:11px 14px;margin-bottom:16px;font-size:13px}
+.banner svg.i{color:var(--warn);margin-top:2px}
+.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:26px}
+.kpi{display:flex;flex-direction:column;gap:6px;padding:16px 18px}
+.kpi-top{display:flex;align-items:center;justify-content:space-between;color:var(--mute);font-size:12.5px;font-weight:500}
+.kpi-ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:var(--acc-soft);color:var(--acc)}
+.kpi-val{font-family:var(--mono);font-size:26px;font-weight:600;letter-spacing:-.5px;line-height:1.15;font-variant-numeric:tabular-nums}
+.kpi-val .sep{color:var(--faint);font-weight:400;margin:0 4px}
+.kpi-sub{font-size:12px;color:var(--faint)}
+.big{font-family:var(--mono);font-size:22px;font-weight:600}
+.sec-title{display:flex;align-items:center;gap:10px;margin:0 0 12px}
+.sec-title h2{font-size:15px;font-weight:650;margin:0}
+.count{font-family:var(--mono);font-size:12px;color:var(--mute);background:var(--panel2);border:1px solid var(--line);border-radius:99px;padding:1px 9px}
+.hint{font-size:12px;color:var(--faint)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(380px,100%),1fr));gap:16px;margin-bottom:28px;align-items:start}
+.grid>*{min-width:0}
+.empty{display:flex;align-items:center;gap:12px;color:var(--mute)}
+/* account card */
+.acc{display:flex;flex-direction:column;gap:14px;transition:border-color .15s,box-shadow .15s}
+.acc:hover{border-color:var(--line2)}
+.acc.off{opacity:.6}
+.acc-head{display:flex;align-items:center;gap:12px}
+.avatar{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;font-weight:700;font-size:15px;text-transform:uppercase;color:var(--acc);background:var(--acc-soft);flex:none}
+.acc-id{min-width:0;flex:1}
+.acc h3{margin:0;font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acc-meta{font-size:12px;color:var(--faint);margin-top:2px;overflow-wrap:anywhere}
+.acc-meta b{font-weight:500;color:var(--text2)}
+.acc-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px}
+.row{font-size:12px}
+.quota{display:flex;flex-direction:column;gap:12px;padding:12px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:12px}
+.q-head{display:flex;justify-content:space-between;font-size:12px;color:var(--mute);font-weight:500}
+.qg{display:flex;flex-direction:column;gap:7px}
+.qg-title{font-size:12.5px;font-weight:600;color:var(--text2)}
+.qb{display:grid;grid-template-columns:46px minmax(0,1fr) 54px;column-gap:10px;row-gap:1px;align-items:center;font-size:12px}
+.qb-l{color:var(--mute)}
+.qb-p{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:500}
+.qb-r{grid-column:2/4;font-size:11px;color:var(--faint)}
+.bar{height:6px;background:var(--panel3);border-radius:99px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#16a34a,#4ade80);transition:width .4s ease}
+.bar i.mid{background:linear-gradient(90deg,#d97706,#fbbf24)}.bar i.low{background:linear-gradient(90deg,#dc2626,#f87171)}
+.stats{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) minmax(0,1fr);gap:8px;margin:0}
+.stats div{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-width:0}
+.stats dt{font-size:11px;color:var(--faint);white-space:nowrap}
+.stats dd{margin:2px 0 0;font-family:var(--mono);font-size:13.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stats dd.bad{color:var(--bad)}
+.lasterr{font-size:12px;background:var(--bad-soft);border-radius:10px;padding:8px 10px;overflow-wrap:anywhere}
+.acts{display:flex;flex-wrap:wrap;gap:6px;padding-top:12px;border-top:1px solid var(--line)}
+.acts button{min-height:30px;padding:0 10px;font-size:12.5px}
+.acts button svg.i{width:14px;height:14px}
+.acts .danger{margin-left:auto}
+.verify{border:1px solid color-mix(in srgb,var(--bad) 50%,transparent);background:var(--bad-soft);border-radius:10px;padding:9px 12px}
+.switch{position:relative;width:42px;height:24px;flex:none}
+.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}
+.switch span{position:absolute;inset:0;background:var(--panel3);border-radius:99px;transition:background .2s}
+.switch span:before{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.switch input:checked+span{background:var(--acc)}
+.switch input:checked+span:before{transform:translateX(18px)}
+.switch input:focus-visible+span{outline:2px solid var(--info);outline-offset:2px}
+/* events */
+.events-card{padding:0;overflow:hidden}
+.events-head{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line)}
+.events-head h2{font-size:15px;font-weight:650;margin:0}
+.events{max-height:380px;overflow:auto}
+.ev{display:grid;grid-template-columns:112px minmax(0,220px) minmax(0,1fr);gap:14px;padding:8px 16px;border-bottom:1px solid var(--line);font-size:12.5px;align-items:baseline}
+.ev:last-child{border-bottom:0}
+.ev:hover{background:var(--panel2)}
+.ev .c{font-family:var(--mono);font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums;white-space:nowrap}
+.ev .a{color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev .t{overflow-wrap:anywhere;color:var(--text)}
+.ev.warn{box-shadow:inset 3px 0 0 var(--warn)}.ev.warn .t{color:var(--warn)}
+.ev.error{box-shadow:inset 3px 0 0 var(--bad)}.ev.error .t{color:var(--bad)}
+.ev-empty{padding:18px 16px}
+.foot-note{margin-top:18px;font-size:12px;color:var(--faint);display:flex;gap:6px;flex-wrap:wrap;justify-content:space-between}
+/* modal */
+.mask{position:fixed;inset:0;background:rgba(2,6,23,.6);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);display:none;align-items:flex-start;justify-content:center;z-index:20;overflow:auto;padding:6vh 14px}
+.modal{background:var(--panel);border:1px solid var(--line2);border-radius:16px;width:min(660px,100%);padding:22px 24px;box-shadow:0 30px 80px -20px rgba(0,0,0,.6);animation:pop .18s ease-out}
+@keyframes pop{from{opacity:0;transform:translateY(8px) scale(.98)}}
+.modal h3{margin:0 0 14px;font-size:17px;font-weight:650}
+.modal h4{font-size:13.5px;font-weight:650;color:var(--text2);padding-top:14px;border-top:1px solid var(--line)}
+.modal h4:first-of-type{border-top:0;padding-top:0}
+.modal ol{padding-left:20px;line-height:1.7}
+.modal p{line-height:1.6}
+.modal .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
+.field{margin-top:12px}
+.field label{display:block;font-size:12.5px;color:var(--mute);margin-bottom:6px;font-weight:500}
+.tabs{display:flex;gap:4px;padding:4px;background:var(--panel2);border:1px solid var(--line);border-radius:11px;margin-bottom:10px}
+.tabs button{flex:1;border:0;background:transparent;color:var(--mute);min-height:32px;border-radius:8px}
+.tabs button:hover{background:transparent;color:var(--text)}
+.tabs button.on{background:var(--panel);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.steps{display:flex;gap:6px;margin-bottom:14px}
+.steps span{flex:1;text-align:center;font-size:12px;padding:6px;border-radius:8px;background:var(--panel2);color:var(--mute)}
+.steps span.on{background:var(--acc);color:var(--acc-ink);font-weight:600}
+code,pre{font-family:var(--mono);font-size:12.5px}
+code{overflow-wrap:anywhere}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6}
+.kv{display:grid;grid-template-columns:104px minmax(0,1fr) auto;gap:10px;align-items:center;margin-top:8px;padding:8px 10px;background:var(--panel2);border-radius:10px}
+.kv button{min-height:28px;padding:0 10px;font-size:12px}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
-.chip{padding:2px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);font-size:12px;cursor:pointer}
-#toast{position:fixed;right:18px;bottom:18px;z-index:40;display:flex;flex-direction:column;gap:8px}
-#toast div{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--acc);padding:10px 14px;border-radius:8px;max-width:420px;box-shadow:0 6px 24px rgba(0,0,0,.3)}
+.chip{padding:3px 9px;border-radius:7px;background:var(--panel2);border:1px solid var(--line);font-family:var(--mono);font-size:12px;cursor:pointer;transition:border-color .15s}
+.chip:hover{border-color:var(--acc);color:var(--acc)}
+table th{font-weight:500;padding:6px 4px}
+table td{padding:6px 4px}
+#toast{position:fixed;right:20px;bottom:20px;z-index:40;display:flex;flex-direction:column;gap:8px}
+#toast div{background:var(--panel);border:1px solid var(--line2);border-left:4px solid var(--info);padding:11px 15px;border-radius:10px;max-width:420px;font-size:13px;box-shadow:0 12px 32px -12px rgba(0,0,0,.45);animation:pop .18s ease-out}
 #toast div.bad{border-left-color:var(--bad)}#toast div.ok{border-left-color:var(--ok)}
-.login{max-width:360px;margin:12vh auto;padding:0 16px}
-.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px}
+/* login */
+.login{max-width:400px;margin:14vh auto;padding:0 16px}
+.login .card{padding:28px}
+.login .logo{width:44px;height:44px;border-radius:13px;margin-bottom:16px}
+.login h2{margin:0 0 6px;font-size:20px}
+.login button.primary{width:100%;min-height:40px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line2);border-top-color:currentColor;border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px}
 @keyframes sp{to{transform:rotate(360deg)}}
-@media (max-width:520px){.grid{grid-template-columns:1fr}.ev{grid-template-columns:90px 1fr}.ev .a{display:none}header{padding:10px}}
+@media (max-width:1100px){.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.toolbar .ghost .lbl{display:none}.toolbar .ghost{width:34px;padding:0}}
+@media (max-width:640px){header{padding:10px 14px}main{padding:16px 14px 32px}.brand-sub{display:none}.grid{grid-template-columns:1fr}.summary{gap:10px}.kpi-val{font-size:22px}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stats .tk{grid-column:1/-1;order:-1}
+  .ev{grid-template-columns:auto minmax(0,1fr);row-gap:2px}.ev .t{grid-column:1/-1}.kv{grid-template-columns:1fr auto}.kv>span:first-child{grid-column:1/-1}.modal{padding:18px}}
+@media (prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 </style>
 </head>
 <body>
 <div id="loginView" class="login" style="display:none">
   <div class="card">
-    <h2 style="margin-top:0">ACP-Ant 控制面板</h2>
+    <div class="logo" data-ic="logo" aria-hidden="true"></div>
+    <h2>登录 ACP-Ant</h2>
     <p class="mute small">请输入管理员密码。第一次使用时，初始密码在服务器的 <code>panel-initial-password.txt</code> 里。</p>
-    <div class="field"><input id="pw" type="password" placeholder="管理员密码" autocomplete="current-password"></div>
-    <div class="field"><button class="primary" style="width:100%" id="loginBtn">登录</button></div>
-    <p id="loginErr" class="err small"></p>
+    <div class="field"><label for="pw">管理员密码</label><input id="pw" type="password" autocomplete="current-password"></div>
+    <div class="field"><button class="primary" id="loginBtn">登录</button></div>
+    <p id="loginErr" class="err small" role="alert"></p>
   </div>
 </div>
 
 <div id="appView" style="display:none">
   <header>
-    <h1>ACP-Ant 控制面板</h1>
-    <span class="pill" id="srvPill"><span class="dot"></span><span>连接中</span></span>
+    <div class="brand"><span class="logo" data-ic="logo" aria-hidden="true"></span><div><div class="brand-name">ACP-Ant</div><div class="brand-sub">Antigravity 网关控制台</div></div></div>
+    <span class="pill" id="srvPill" role="status"><span class="dot"></span><span>连接中</span></span>
     <span class="sp"></span>
-    <button class="primary" data-top="add">＋ 添加账号</button>
-    <button data-top="quotaAll">刷新全部额度</button>
-    <button data-top="proxies">代理记录</button>
-    <button data-top="connect">接入信息</button>
-    <button data-top="test">在线测试</button>
-    <button data-top="settings">设置</button>
-    <button data-top="logout">退出</button>
+    <nav class="toolbar" aria-label="面板操作">
+      <button class="ghost" data-top="quotaAll" data-ic="refresh" title="刷新全部额度"><span class="lbl">刷新全部额度</span></button>
+      <button class="ghost" data-top="proxies" data-ic="globe" title="代理记录"><span class="lbl">代理记录</span></button>
+      <button class="ghost" data-top="connect" data-ic="plug" title="接入信息"><span class="lbl">接入信息</span></button>
+      <button class="ghost" data-top="test" data-ic="send" title="在线测试"><span class="lbl">在线测试</span></button>
+      <span class="divider" aria-hidden="true"></span>
+      <button class="icon" data-top="settings" data-ic="gear" title="设置" aria-label="设置"></button>
+      <button class="icon" data-top="logout" data-ic="logout" title="退出登录" aria-label="退出登录"></button>
+      <button class="primary" data-top="add" data-ic="plus">添加账号</button>
+    </nav>
   </header>
   <main>
     <div id="banner"></div>
-    <div class="summary" id="summary"></div>
+    <section class="summary" id="summary" aria-label="概览"></section>
+    <div class="sec-title"><h2>账号池</h2><span class="count" id="accCount">0</span><span class="sp"></span><span class="hint">每 10 秒自动刷新</span></div>
     <div class="grid" id="accounts"></div>
-    <h2>最近事件</h2>
-    <div class="card events" id="events"></div>
-    <p class="mute small" style="margin-top:14px">每 10 秒自动刷新。添加账号后不自动读取额度，点「刷新额度」手动读取（不消耗额度）；定时巡检按设置执行。</p>
-    <p class="mute small">ACP-Ant · 开源项目</p>
+    <section class="card events-card" aria-label="最近事件">
+      <div class="events-head"><h2>最近事件</h2><span class="sp"></span><span class="hint">最新在上</span></div>
+      <div class="events" id="events"></div>
+    </section>
+    <div class="foot-note"><span>添加账号后不自动读取额度，点「刷新额度」手动读取（不消耗额度）；定时巡检按设置执行。</span><span>ACP-Ant · 开源项目</span></div>
   </main>
 </div>
 
-<div class="mask" id="mask"><div class="modal" id="modal"></div></div>
-<div id="toast"></div>
-
+<div class="mask" id="mask"><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
+<div id="toast" role="status" aria-live="polite"></div>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let DATA = null, TIMER = null, CONNECT = null;
+const ICONS = {
+  logo: '<path d="M12 2.5 20.5 7.3v9.4L12 21.5l-8.5-4.8V7.3z"/><path d="M12 8v4l3.5 2"/><path d="M12 12l-3.5 2"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  refresh: '<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+  plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+  send: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
+  gear: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7l10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>',
+  undo: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>'};
+const ic = n => '<svg class="i" viewBox="0 0 24 24" aria-hidden="true">' + ICONS[n] + "</svg>";
+document.querySelectorAll("[data-ic]").forEach(el => el.insertAdjacentHTML("afterbegin", ic(el.dataset.ic)));
 
 async function api(path, opt = {}) {
   const r = await fetch("/panel/api" + path, {method: opt.method || (opt.body !== undefined ? "POST" : "GET"),
@@ -168,57 +301,64 @@ async function refresh() {
 function render() {
   const s = DATA.server, t = DATA.today;
   $("#srvPill").innerHTML = '<span class="dot ok"></span><span>运行中 · v' + esc(s.version) + " · 已运行 " + esc(ago(s.started).replace("前", "")) + "</span>";
-  $("#banner").innerHTML = (s.initial_password ? '<div class="banner">你还在用初始密码。建议点右上角「设置」改成自己的密码（改完服务器上的初始密码文件会自动删除）。</div>' : "");
+  $("#banner").innerHTML = (s.initial_password ? '<div class="banner">' + ic("alert") + '<span>你还在用初始密码。建议点右上角「设置」改成自己的密码（改完服务器上的初始密码文件会自动删除）。</span></div>' : "");
   $("#summary").innerHTML = [
-    ["账号", s.usable + " / " + s.accounts, "可用 / 总数"],
-    ["今日请求", t.ok + " / " + t.fail, "成功 / 失败"],
-    ["今日 Token", num(t.in) + " / " + num(t.out), "输入 / 输出（含思考）"],
-    ["正在处理 / 同时上限", s.inflight + " / " + s.usable * s.per_account,
+    ["账号", "users", s.usable, s.accounts, "可用 / 总数"],
+    ["今日请求", "activity", t.ok, t.fail, "成功 / 失败"],
+    ["今日 Token", "zap", num(t.in), num(t.out), "输入 / 输出（含思考）"],
+    ["正在处理 / 同时上限", "layers", s.inflight, s.usable * s.per_account,
      "每个账号同时 " + s.per_account + " 个 · " + (s.waiting ? '<span class="err">排队 ' + s.waiting + " 个</span>" : "无排队")],
-  ].map(([a, b, c]) => '<div class="card"><div class="mute small">' + a + '</div><div class="big">' + esc(b) + '</div><div class="mute small">' + c + "</div></div>").join("");
+  ].map(([a, i, x, y, c]) => '<div class="card kpi"><div class="kpi-top"><span>' + a + '</span><span class="kpi-ic">' + ic(i) + '</span></div><div class="kpi-val">' +
+    esc(x) + '<span class="sep">/</span>' + esc(y) + '</div><div class="kpi-sub">' + c + "</div></div>").join("");
+  $("#accCount").textContent = DATA.accounts.length;
   $("#accounts").innerHTML = DATA.accounts.length ? DATA.accounts.map(cardHtml).join("") :
-    '<div class="card">还没有账号。点右上角「＋ 添加账号」，按提示填代理并登录 Google。</div>';
+    '<div class="card empty">' + ic("users") + '<span>还没有账号。点右上角「添加账号」，按提示填代理并登录 Google。</span></div>';
 }
 
 function quotaHtml(a) {
-  if (a.quota_error) return '<div class="row err small">读取额度失败：' + esc(a.quota_error) + "</div>";
-  if (!a.quota) return '<div class="row mute small">尚未读取额度，点击「刷新额度」查看。</div>';
-  return a.quota.map(g => '<div class="qg"><b>' + esc(GROUP[g.group] || g.group) + "</b>" + g.buckets.map(b => {
+  if (a.quota_error) return '<div class="err small">读取额度失败：' + esc(a.quota_error) + "</div>";
+  if (!a.quota) return '<div class="mute small">尚未读取额度，点击「刷新额度」查看。</div>';
+  return a.quota.map(g => '<div class="qg"><div class="qg-title">' + esc(GROUP[g.group] || g.group) + "</div>" + g.buckets.map(b => {
     const p = Math.max(0, Math.min(100, Math.round((b.remaining ?? 0) * 1000) / 10));
     const cls = p > 50 ? "" : p > 20 ? "mid" : "low";
-    return '<div class="qb" title="' + esc(b.description) + '"><span class="mute">' + esc(WIN[b.window] || b.name || b.window) +
-      '</span><span class="bar"><i class="' + cls + '" style="width:' + p + '%"></i></span><span>' + p + "%</span></div>" +
-      '<div class="mute small" style="margin-left:66px">' + esc(until(b.reset)) + "</div>";
+    const w = WIN[b.window] || b.name || b.window;
+    return '<div class="qb" title="' + esc(b.description) + '"><span class="qb-l">' + esc(w) +
+      '</span><span class="bar" role="progressbar" aria-label="' + esc(w + " 剩余额度") + '" aria-valuenow="' + p + '" aria-valuemin="0" aria-valuemax="100"><i class="' + cls + '" style="width:' + p + '%"></i></span><span class="qb-p">' + p + "%</span>" +
+      '<span class="qb-r">' + esc(until(b.reset)) + "</span></div>";
   }).join("") + "</div>").join("");
 }
 
 function cardHtml(a) {
   const n = esc(a.name);
   const cool = a.cooldown_s ? "（还剩 " + Math.ceil(a.cooldown_s / 60) + " 分钟）" : "";
-  return '<div class="card acc s-' + a.status + (a.enabled ? "" : " off") + '">' +
-    '<div class="top"><h3>' + n + '</h3><span class="pill s-' + a.status + '"><span class="dot"></span>' + esc(a.status_text + cool) + "</span>" +
-    '<span class="sp"></span><label class="switch" title="' + (a.enabled ? "已开启：会被调用" : "已关闭：不会被调用") + '"><input type="checkbox" data-act="toggle" data-name="' + n + '"' + (a.enabled ? " checked" : "") + "><span></span></label></div>" +
-    '<div class="row small"><span class="mute">代理</span> ' + (a.proxy ? esc(a.proxy) : '<span class="mute">无</span>') +
-    (a.egress_ip ? ' · <span class="mute">出口</span> ' + esc(a.egress_ip) + (a.country ? " " + esc(a.country) : "") : "") + "</div>" +
+  const tip = a.enabled ? "已开启：会被调用" : "已关闭：不会被调用";
+  return '<article class="card acc s-' + a.status + (a.enabled ? "" : " off") + '">' +
+    '<div class="acc-head"><span class="avatar" aria-hidden="true">' + esc(a.name.slice(0, 1)) + '</span><div class="acc-id"><h3 title="' + n + '">' + n + "</h3>" +
+    '<div class="acc-meta">代理 <b>' + (a.proxy ? esc(a.proxy) : "无") + "</b>" +
+    (a.egress_ip ? " · 出口 <b>" + esc(a.egress_ip) + (a.country ? " " + esc(a.country) : "") + "</b>" : "") + "</div></div>" +
+    '<label class="switch" title="' + tip + '"><input type="checkbox" role="switch" aria-label="' + n + " " + tip + '" data-act="toggle" data-name="' + n + '"' + (a.enabled ? " checked" : "") + "><span></span></label></div>" +
+    '<div class="acc-status"><span class="badge s-' + a.status + '"><span class="dot"></span>' + esc(a.status_text + cool) + "</span>" +
+    '<span class="faint">上次检测 ' + esc(ago(a.last_check_at)) + "</span>" +
+    (a.last_check_msg ? (a.last_check_ok ? '<span class="faint">· ' + esc(a.last_check_msg) + "</span>" : '<span class="err">· ' + esc(a.last_check_msg) + "</span>") : "") +
+    '<span class="faint">· 处理中 ' + a.inflight + " / " + DATA.server.per_account + "</span></div>" +
     (a.verify_url ? '<div class="verify small">Google 要求验证这个账号：<a href="' + esc(a.verify_url) + '" target="_blank" rel="noopener">打开验证页面</a>（浏览器要登录的是这个账号用的 Google 账号），验证完点「检测」。</div>' : "") +
-    '<div class="row small"><span class="mute">额度</span> <span class="mute">' + (a.quota_at ? "· " + esc(ago(a.quota_at)) + "读取" : "") + "</span>" + quotaHtml(a) + "</div>" +
-    '<div class="row small"><span class="mute">今日</span> 成功 ' + a.today.ok + " · 失败 " + a.today.fail + " · Token " + num(a.today.in) + " / " + num(a.today.out) +
-    ' <span class="mute">｜近 7 天</span> ' + a.week.ok + " / " + a.week.fail + "</div>" +
-    '<div class="row small"><span class="mute">正在处理</span> ' + a.inflight + " / " + DATA.server.per_account + ' <span class="mute">｜上次检测</span> ' + esc(ago(a.last_check_at)) +
-    (a.last_check_msg ? "：" + (a.last_check_ok ? "" : '<span class="err">') + esc(a.last_check_msg) + (a.last_check_ok ? "" : "</span>") : "") + "</div>" +
-    (a.last_error ? '<div class="row small"><span class="mute">最近错误（' + esc(ago(a.last_error_at)) + '）</span> <span class="err">' + esc(kindText(a.last_error)).slice(0, 220) + "</span></div>" : "") +
+    '<div class="quota"><div class="q-head"><span>剩余额度</span><span>' + (a.quota_at ? esc(ago(a.quota_at)) + "读取" : "") + "</span></div>" + quotaHtml(a) + "</div>" +
+    '<dl class="stats"><div><dt>今日成功 / 失败</dt><dd>' + a.today.ok + ' / <span' + (a.today.fail ? ' class="err"' : "") + ">" + a.today.fail + "</span></dd></div>" +
+    '<div class="tk"><dt>今日 Token 入 / 出</dt><dd>' + num(a.today.in) + " / " + num(a.today.out) + "</dd></div>" +
+    "<div><dt>近 7 天成功 / 失败</dt><dd>" + a.week.ok + " / " + a.week.fail + "</dd></div></dl>" +
+    (a.last_error ? '<div class="lasterr"><span class="mute">最近错误（' + esc(ago(a.last_error_at)) + '）</span> <span class="err">' + esc(kindText(a.last_error)).slice(0, 220) + "</span></div>" : "") +
     '<div class="acts">' +
-    '<button data-act="check" data-name="' + n + '">检测</button>' +
-    '<button data-act="quota" data-name="' + n + '">刷新额度</button>' +
-    '<button data-act="login" data-name="' + n + '">重新登录</button>' +
-    '<button data-act="proxy" data-name="' + n + '">换代理</button>' +
-    '<button data-act="reset" data-name="' + n + '">清除冷却</button>' +
-    '<button data-act="delete" data-name="' + n + '" class="danger">删除</button></div></div>';
+    '<button data-act="check" data-name="' + n + '">' + ic("shield") + "检测</button>" +
+    '<button data-act="quota" data-name="' + n + '">' + ic("refresh") + "刷新额度</button>" +
+    '<button data-act="login" data-name="' + n + '">' + ic("login") + "重新登录</button>" +
+    '<button data-act="proxy" data-name="' + n + '">' + ic("globe") + "换代理</button>" +
+    '<button data-act="reset" data-name="' + n + '">' + ic("undo") + "清除冷却</button>" +
+    '<button data-act="delete" data-name="' + n + '" class="danger" aria-label="删除 ' + n + '">' + ic("trash") + "删除</button></div></article>";
 }
 
 function renderEvents(list) {
-  $("#events").innerHTML = list.length ? list.map(e => '<div class="ev ' + esc(e.level) + '"><span class="mute">' + clock(e.t) + '</span><span class="a">' + esc(e.account || "系统") +
-    '</span><span class="t">' + esc(kindText(e.text)) + "</span></div>").join("") : '<span class="mute">暂无</span>';
+  $("#events").innerHTML = list.length ? list.map(e => '<div class="ev ' + esc(e.level) + '"><span class="c">' + clock(e.t) + '</span><span class="a" title="' + esc(e.account || "系统") + '">' + esc(e.account || "系统") +
+    '</span><span class="t">' + esc(kindText(e.text)) + "</span></div>").join("") : '<div class="ev-empty mute">暂无事件</div>';
 }
 
 // ---------- modal
@@ -366,7 +506,7 @@ function checkStep(name) {
   openModal('<h3>添加账号 ' + esc(name) + '</h3>' + steps(2) + '<p id="ckMsg"><span class="spin"></span> 正在确认登录并完成添加（不读取额度、不发测试消息）…</p><div class="foot"><button id="ckDone">完成</button></div>');
   $("#ckDone").onclick = () => { delete $("#modal").dataset.sticky; closeModal(); refresh(); };
   api("/accounts/" + name + "/check", {body: {enable_if_ok: true, light: true}}).then(r => {
-    if (r.ok) $("#ckMsg").innerHTML = '<span style="color:var(--ok)">✔ 登录正常，已经开启。</span><br><span class="small mute">未自动读取额度；点击账号卡片上的「刷新额度」即可查看。要真发一句话试，可以点「检测」。</span>';
+    if (r.ok) $("#ckMsg").innerHTML = '<span style="color:var(--ok);display:inline-flex;gap:6px;align-items:center">' + ic("check") + '登录正常，已经开启。</span><br><span class="small mute">未自动读取额度；点击账号卡片上的「刷新额度」即可查看。要真发一句话试，可以点「检测」。</span>';
     else if (r.verify_url) $("#ckMsg").innerHTML = '<span class="err">Google 要求验证这个账号。</span> <a href="' + esc(r.verify_url) + '" target="_blank" rel="noopener">打开验证页面</a>，验证完在账号卡片上点「检测」，再打开开关。';
     else $("#ckMsg").innerHTML = '<span class="err">' + esc(r.message) + "</span><br>账号先保持关闭，处理好后在卡片上点「检测」，再打开开关。";
     refresh();
