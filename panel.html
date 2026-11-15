@@ -76,7 +76,8 @@ main{max-width:1440px;margin:0 auto;padding:22px 22px 40px}
 .kpi-ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:var(--acc-soft);color:var(--acc)}
 .kpi-val{font-family:var(--mono);font-size:26px;font-weight:600;letter-spacing:-.5px;line-height:1.15;font-variant-numeric:tabular-nums}
 .kpi-val .sep{color:var(--faint);font-weight:400;margin:0 4px}
-.kpi-sub{font-size:12px;color:var(--faint)}
+.kpi-sub{font-size:12px;color:var(--faint);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.kpi-sub button{min-height:26px;padding:0 10px;font-size:12px;margin-left:auto}
 .big{font-family:var(--mono);font-size:22px;font-weight:600}
 .sec-title{display:flex;align-items:center;gap:10px;margin:0 0 12px}
 .sec-title h2{font-size:15px;font-weight:650;margin:0}
@@ -210,8 +211,8 @@ table td{padding:6px 4px}
       <button class="ghost" data-top="proxies" data-ic="globe" title="代理记录"><span class="lbl">代理记录</span></button>
       <button class="ghost" data-top="connect" data-ic="plug" title="接入信息"><span class="lbl">接入信息</span></button>
       <button class="ghost" data-top="test" data-ic="send" title="在线测试"><span class="lbl">在线测试</span></button>
+      <button class="ghost" data-top="settings" data-ic="gear" title="设置"><span class="lbl">设置</span></button>
       <span class="divider" aria-hidden="true"></span>
-      <button class="icon" data-top="settings" data-ic="gear" title="设置" aria-label="设置"></button>
       <button class="icon" data-top="logout" data-ic="logout" title="退出登录" aria-label="退出登录"></button>
       <button class="primary" data-top="add" data-ic="plus">添加账号</button>
     </nav>
@@ -307,7 +308,8 @@ function render() {
     ["今日请求", "activity", t.ok, t.fail, "成功 / 失败"],
     ["今日 Token", "zap", num(t.in), num(t.out), "输入 / 输出（含思考）"],
     ["正在处理 / 同时上限", "layers", s.inflight, s.usable * s.per_account,
-     "每个账号同时 " + s.per_account + " 个 · " + (s.waiting ? '<span class="err">排队 ' + s.waiting + " 个</span>" : "无排队")],
+     "<span>每个账号同时 " + s.per_account + " 个 · " + (s.waiting ? '<span class="err">排队 ' + s.waiting + " 个</span>" : "无排队") +
+     '</span><button data-top="concurrency" title="调整每个账号同时处理的请求数">调整</button>'],
   ].map(([a, i, x, y, c]) => '<div class="card kpi"><div class="kpi-top"><span>' + a + '</span><span class="kpi-ic">' + ic(i) + '</span></div><div class="kpi-val">' +
     esc(x) + '<span class="sep">/</span>' + esc(y) + '</div><div class="kpi-sub">' + c + "</div></div>").join("");
   $("#accCount").textContent = DATA.accounts.length;
@@ -523,6 +525,7 @@ async function topAction(what, btn) {
     if (what === "proxies") await proxiesModal();
     if (what === "test") await testModal();
     if (what === "settings") settingsModal();
+    if (what === "concurrency") { settingsModal(); $("#stPer").focus(); }
   } catch (err) { toast(err.message, "bad"); }
 }
 
