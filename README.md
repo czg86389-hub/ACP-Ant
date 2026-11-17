@@ -103,6 +103,24 @@ cat data/panel-initial-password.txt     # 面板初始密码（可能要 sudo）
 - 默认只监听本机 `127.0.0.1:8095`，要绑定域名请在前面加 Caddy / Nginx（见下文）；端口和其它设置在 `docker-compose.yml` 里改。
 - 命令行管账号：`docker compose exec acp-ant account.sh list`（一般用面板就够了）。
 
+#### 在 GitHub Actions 手动发布 Docker 镜像
+
+仓库提供 **Publish Docker image** workflow，手动构建并推送到 **Docker Hub**，同一个镜像标签支持 `linux/amd64` 和 `linux/arm64`（ARM64 / aarch64）。
+
+1. 在 Docker Hub 创建镜像仓库和具有写入权限的 Access Token。
+2. 在 GitHub 仓库 **Settings → Secrets and variables → Actions → New repository secret** 添加：
+   - `DOCKERHUB_USERNAME`：Docker Hub 用户名。
+   - `DOCKERHUB_TOKEN`：上面的 Access Token。
+3. 将 workflow 提交到仓库默认分支后，打开 **Actions → Publish Docker image → Run workflow**，选择要构建的分支并填写：
+
+   | 参数 | 示例 | 说明 |
+   |---|---|---|
+   | `image_name` | `yourname/acp-ant` | Docker Hub 完整镜像名，使用小写；账号须有该仓库的写入权限 |
+   | `version` | `1.5.0` | 发布为 `yourname/acp-ant:1.5.0`，也支持 `v1.5.0` 等合法 Docker 标签 |
+   | `latest` | 勾选（默认） | 同时发布 `yourname/acp-ant:latest`；取消勾选则只发布版本标签 |
+
+发布成功后可以运行 `docker pull yourname/acp-ant:1.5.0`，Docker 会自动选择当前机器对应的架构。此流程仅在手动点击 **Run workflow** 时发布。
+
 ### 更新
 
 - 网页控制面板每 6 小时读一次 GitHub 上的 [CHANGELOG.md](CHANGELOG.md)（只读取这一个公开文件，不上传任何数据），有新版本时在顶部提示并列出更新内容。可以在「设置」里关闭，或在 `gateway.env` 里写 `ACPANT_UPDATE_CHECK_HOURS=0` 彻底关掉。
