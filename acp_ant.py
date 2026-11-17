@@ -92,11 +92,13 @@ HEARTBEAT = float(os.environ.get("AGY_HEARTBEAT", "15"))       # streams: keep-a
 MAX_CONTINUE = 3                                               # auto-continue when a reply stops at max_tokens
 COOLDOWN_QUOTA = _env_int("AGY_COOLDOWN_QUOTA", 30 * 60)       # quota exhausted
 COOLDOWN_RATE = _env_int("AGY_COOLDOWN_RATE", 90)              # rate limited / overloaded
+COOLDOWN_UPSTREAM = _env_int("AGY_COOLDOWN_UPSTREAM", 30)      # generic upstream 429; prevent retry storms
 COOLDOWN_VERIFY = _env_int("AGY_COOLDOWN_VERIFY", 600)         # Google asks the account to verify itself
 KEEP_HOURS = float(os.environ.get("AGY_KEEP_HOURS", "6"))      # delete local conversation files older than this (0 = keep)
 REQUIRE_PROXY = _env_bool("AGY_REQUIRE_PROXY", False)   # since 1.4.0 a proxy is optional; set 1 to insist on one per account
 DEFAULT_MODEL = os.environ.get("AGY_DEFAULT_MODEL", "gemini-3.8-flash-medium")
 MODEL_FALLBACK = _env_bool("AGY_MODEL_FALLBACK", True)         # unknown model name -> DEFAULT_MODEL instead of an error
+SANITIZE_WAF_FINGERPRINTS = _env_bool("AGY_SANITIZE_WAF_FINGERPRINTS", True)
 MAX_IMAGES = _env_int("AGY_MAX_IMAGES", 200)                   # images per request. Measured 2026-11-12: Gemini 3.8 Flash
 # agy cuts a prompt that is too long at the END (about 188 000 characters), which loses the newest input. Keep the
 # whole prompt under this many characters by leaving out the oldest history (0 = no limit).
@@ -270,9 +272,11 @@ def classify(message: str) -> str:
         return "BAD_REQUEST"   # the request itself is wrong; another account would fail the same way
     if re.search(r"authentication required|not logged in|unauthenticated|sign in|invalid_grant|token.*(expired|revoked)", m):
         return "AUTH"
-    if re.search(r"quota|resource.?exhausted|limit reached|exceeded your|usage limit", m):
+    if re.search(r"model[_ -]?capacity[_ -]?exhausted|selected model is at capacity|no available (?:model )?instances", m):
+        return "RATE_LIMIT"
+    if re.search(r"individual quota reached|quota[_ -]?exhausted|quotaresetdelay|quotaresettimestamp|quota exceeded|exceeded your current quota|insufficient_quota", m):
         return "QUOTA"
-    if re.search(r"rate.?limit|429|too many requests|overloaded|capacity|unavailable|503", m):
+    if re.search(r"resource.?exhausted|rate.?limit|429|too many requests|overloaded|capacity|unavailable|503", m):
         return "RATE_LIMIT"
     if re.search(r"timeout|timed out|deadline", m):
         return "TIMEOUT"
@@ -1067,7 +1071,7 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
             acc.last_error, acc.last_error_at = str(e)[:300], time.time()
             log.warning("fail account=%s kind=%s %.1fs: %s", acc.name, e.kind, time.time() - t0, str(e)[:300])
             event("warn", acc.name, "%s: %s" % (e.kind, str(e)[:200]))
-            if e.kind in ("QUOTA", "RATE_LIMIT", "VERIFY"):
+            if e.kind in ("QUOTA", "RATE_LIMIT", "UPSTREAM_LIMIT", "VERIFY"):
                 acc.cooldown_kind = e.kind
             if e.kind == "QUOTA":
                 acc.cooldown_until = time.time() + COOLDOWN_QUOTA
@@ -1086,6 +1090,7 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
             elif e.kind == "UPSTREAM_LIMIT":
                 # maybe this account, maybe this prompt: no cooldown, check the real quota in the background,
                 # and give up after two accounts so one bad prompt cannot walk through the whole pool
+                acc.cooldown_until = max(acc.cooldown_until, time.time() + COOLDOWN_UPSTREAM)
                 upstream_fails += 1
                 asyncio.create_task(quota_cooldown(acc))
                 if upstream_fails >= 2:
@@ -1494,6 +1499,66 @@ def from_responses(body: dict) -> tuple[str, list[dict], list[dict], Any, set[st
     return "\n\n".join(s for s in system if s), msgs, tools, choice, custom
 
 
+_WAF_FINGERPRINT = re.compile(
+    r"(?im)^\s*(?:x-[a-z0-9_-]*billing[a-z0-9_-]*|[a-z0-9_-]+-billing-(?:header|metadata|token|info))"
+    r"\s*:[^\r\n]*(?:\r?\n|$)"
+    r"|^\s*x-[a-z0-9_-]+\s*:[^\r\n]*(?:cc_version|cc_entrypoint|cc_workload|cc_is_subagent|cc_prev_req|cc_prompt_id|cc_turn_origin|cch=)[^\r\n]*(?:\r?\n|$)"
+    r"|x-anthropic-billing-header\s*:[^\r\n]*"
+    r"|You are a Claude agent, built on Anthropic's Claude Agent SDK\.?\s*"
+    r"|You are Claude Code, Anthropic's official CLI for Claude(?:, running within the Claude Agent SDK)?\.?\s*"
+    r"|^This iteration of Claude is Claude [^\n]+\n\n?"
+    r"|^# Environment\n(?: - [^\n]*(?:Claude|claude-)[^\n]*\n)+\n?"
+)
+_WAF_IDENTITY = re.compile(
+    r"(?is)\b(?:you are|we are|this is)\s+"
+    r"(?:a\s+)?(?:claude(?:\s+code)?|chatgpt|codex|openai|anthropic|"
+    r"cursor|cline|opencode|openclaw|qwen|deepseek|gemini)\b"
+    r"[^\n.!?]{0,240}(?:assistant|agent|cli|sdk|model|ai|coding)[^\n.!?]*[.!?]?"
+)
+_WAF_EXACT_IDENTITY = (
+    (re.compile(r"(?m)^You are Claude Code, an AI assistant[^\n]*\.?\s*"), "You are an AI assistant."),
+    (re.compile(r"(?m)^You are (?:a coding agent|GPT-[A-Za-z0-9.-]+) running in the Codex CLI, a terminal-based coding assistant\.\s*"), "You are a coding agent running in a terminal-based coding CLI."),
+    (re.compile(r"(?m)^You are Codex,(?: (?:a(?:n| coding) agent )?based on [A-Za-z0-9.-]+\.(?: You are running as a coding agent in the Codex CLI on a user's computer\.)?)\s*"), "You are a coding agent."),
+    (re.compile(r"(?m)^You are Codex, an OpenAI general-purpose agentic assistant\s*"), "You are a general-purpose agentic assistant."),
+)
+_WAF_SENSITIVE_WORDS = (
+    (re.compile(r"\bClaude Agent SDK\b"), "Agent SDK"),
+)
+_WAF_COMPETITOR = re.compile(
+    r"(?i)\b(?:openai|anthropic|qwen|bytedance|tencent|xiaomi|huawei|"
+    r"deepseek|baidu|mistral|cohere)\b|字节跳动|腾讯|小米|华为|通义千问|"
+    r"通义灵码|通义|百度|文心一言|文心快码|深度求索|豆包|混元"
+)
+_WAF_CODE_BLOCK = re.compile(r"(?s)(```.*?```|`[^`\r\n]+`)")
+_WAF_OFFICIAL_IDENTITY = (
+    "You are Antigravity, a powerful agentic AI coding assistant designed by "
+    "the Google Deepmind team working on Advanced Agentic Coding."
+)
+
+def sanitize_waf_fingerprints(text: str) -> str:
+    """Sanitize third-party client fingerprints in system/tool metadata only."""
+    if not SANITIZE_WAF_FINGERPRINTS or not text:
+        return text
+    placeholders: list[str] = []
+    protected = _WAF_CODE_BLOCK.sub(
+        lambda m: (placeholders.append(m.group(0)) or f"__ACP_WAF_CODE_{len(placeholders)-1}__"),
+        text,
+    )
+    protected = _WAF_FINGERPRINT.sub("", protected)
+    normalized = _WAF_IDENTITY.sub(_WAF_OFFICIAL_IDENTITY, protected)
+    for pattern, replacement in _WAF_EXACT_IDENTITY:
+        normalized = pattern.sub(replacement, normalized)
+    for pattern, replacement in _WAF_SENSITIVE_WORDS:
+        normalized = pattern.sub(replacement, normalized)
+    head, tail = normalized[:1500], normalized[1500:]
+    head = _WAF_COMPETITOR.sub("Google", head)
+    out = re.sub(r"\n{3,}", "\n\n", head + tail)
+    return re.sub(
+        r"__ACP_WAF_CODE_(\d+)__",
+        lambda m: placeholders[int(m.group(1))] if int(m.group(1)) < len(placeholders) else m.group(0),
+        out,
+    )
+
 def tool_instructions(tools: list[dict], choice: Any, parallel: bool = True) -> str:
     lines = [
         "# Tools",
@@ -1518,7 +1583,7 @@ def tool_instructions(tools: list[dict], choice: Any, parallel: bool = True) -> 
     lines.append("")
     lines.append("Available tools (JSON Schema for the arguments):")
     for t in tools:
-        lines.append(json.dumps({"name": t["name"], "description": t["description"], "parameters": t["parameters"]}, ensure_ascii=False))
+        lines.append(json.dumps({"name": t["name"], "description": sanitize_waf_fingerprints(t["description"]), "parameters": t["parameters"]}, ensure_ascii=False))
     return "\n".join(lines)
 
 
@@ -1577,11 +1642,11 @@ def _fit_history(history: list[dict], current: list[dict], system_chars: int) ->
 def to_acp(system: str, msgs: list[dict], tools: list[dict], choice: Any, extra_system: str = "", parallel: bool = True) -> tuple[str, list[dict]]:
     """Internal conversation -> (system prompt, ACP prompt blocks). Earlier turns become a transcript (images stay
     in place as image blocks); the trailing user / tool messages are this turn's input."""
-    sys_parts = [system] if system else []
+    sys_parts = [sanitize_waf_fingerprints(system)] if system else []
     if tools and choice != "none":
         sys_parts.append(tool_instructions(tools, choice, parallel))
     if extra_system:
-        sys_parts.append(extra_system)
+        sys_parts.append(sanitize_waf_fingerprints(extra_system))
     msgs = [m for m in msgs if m["parts"]]
     if not msgs:
         raise HTTPException(400, "no messages")
