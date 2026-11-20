@@ -61,9 +61,9 @@ from typing import Any, AsyncIterator
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from studio_provider import STUDIO, is_studio_model
+from studio_provider import PREFIX as STUDIO_PREFIX, STUDIO, is_studio_model
 
-__version__ = "1.5.4"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
+__version__ = "1.5.5"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
 
 log = logging.getLogger("acp-ant")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -97,6 +97,13 @@ KEEP_HOURS = float(os.environ.get("AGY_KEEP_HOURS", "6"))      # delete local co
 REQUIRE_PROXY = _env_bool("AGY_REQUIRE_PROXY", False)   # since 1.4.0 a proxy is optional; set 1 to insist on one per account
 DEFAULT_MODEL = os.environ.get("AGY_DEFAULT_MODEL", "gemini-3.8-flash-medium")
 MODEL_FALLBACK = _env_bool("AGY_MODEL_FALLBACK", True)         # unknown model name -> DEFAULT_MODEL instead of an error
+# Models whose quota is shared between Antigravity ("gemini-4-neon") and AI Studio ("aistudio/gemini-4-neon"): when
+# the named source cannot serve (limit reached, cooling down, logged out, down), the same request goes to the other.
+SHARED_MODELS = frozenset(m.strip() for m in os.environ.get("AGY_SHARED_MODELS", "gemini-3.8-flash,gemini-4-hydrogen,gemini-4-neon").split(",") if m.strip())
+# Thought level used when a request names none ("model=level", comma separated; empty = each model's own default).
+# A level the model does not offer becomes the nearest lower one it has (xhigh -> high -> medium -> low).
+DEFAULT_LEVELS = dict(p.split("=", 1) for p in (x.strip() for x in os.environ.get(
+    "AGY_DEFAULT_LEVELS", "gemini-4-neon=xhigh,gemini-4-hydrogen=xhigh,gemini-3.8-flash=high").split(",")) if "=" in p)
 MAX_IMAGES = _env_int("AGY_MAX_IMAGES", 200)                   # images per request. Measured 2026-11-12: Gemini 3.8 Flash
 # agy cuts a prompt that is too long at the END (about 188 000 characters), which loses the newest input. Keep the
 # whole prompt under this many characters by leaving out the oldest history (0 = no limit).
@@ -874,6 +881,127 @@ def pinned_email(model: Any) -> str:
     return pin[1] if pin else ""
 
 
+# ------------------------------------------------------------------------------- quota shared by both sources
+STUDIO_FALLBACK_STATUS = {403, 429, 500, 502, 503, 504}     # AI Studio limit / refusal / cooling / service down
+STUDIO_TRIED: contextvars.ContextVar = contextvars.ContextVar("acp_studio_tried", default=False)   # no ping-pong
+SHARED_FALLBACK_KINDS = ("QUOTA", "RATE_LIMIT", "UPSTREAM_LIMIT", "NO_ACCOUNT", "VERIFY")
+
+
+def shared_base(model: Any) -> str:
+    """The shared model id behind "gemini-4-neon", "gemini-4-neon-high" or "aistudio/gemini-4-neon", else ""."""
+    name = str(model or "")
+    if is_studio_model(name):
+        name = name[len(STUDIO_PREFIX):]
+    base = resolve_model(name)[0] if name else ""
+    return base if base in SHARED_MODELS else ""
+
+
+def antigravity_can_serve(base: str, effort: str | None = None) -> bool:
+    """Is some Antigravity account that offers this model usable right now (within the caller's pin)?"""
+    POOL.scan()
+    wanted = {base} | ({"%s-%s" % (base, effort)} if effort else set())
+    pin = PIN.get()
+    accs = [a for a in POOL.accounts.values() if not pin or a.name == pin[0]]
+    offering = [a for a in accs if not wanted.isdisjoint(a.models)]
+    if offering:
+        return any(a.usable() for a in offering)
+    if any(not wanted.isdisjoint(a.models) for a in POOL.accounts.values()):
+        return False                        # only accounts outside the pin offer it
+    return any(a.usable() for a in accs)    # no account has reported its models yet: assume it can
+
+
+def nearest_level(effort: str | None, levels: list[str]) -> str | None:
+    """The requested thought level, or the nearest lower one this model offers (xhigh -> high -> ...)."""
+    if not effort or not levels or effort in levels or effort not in LEVELS:
+        return effort
+    lower = [lv for lv in LEVELS[:LEVELS.index(effort)] if lv in levels]
+    return lower[-1] if lower else effort
+
+
+def with_level(path: str, body: dict, effort: str | None) -> dict:
+    """An AI Studio request with this thought level unless the client already chose one (Chat / Responses)."""
+    if not effort:
+        return body
+    out = dict(body)
+    if path == "/v1/chat/completions":
+        out.setdefault("reasoning_effort", effort)
+    elif path == "/v1/responses":
+        out["reasoning"] = {**(out.get("reasoning") or {}), "effort": (out.get("reasoning") or {}).get("effort") or effort}
+    return out
+
+
+def _studio_body(path: str, body: dict, base: str) -> dict:
+    """The same request for AI Studio: "aistudio/<base>", the thought level of a "-high" style name (or the model's
+    default level) kept."""
+    effort = resolve_model(str(body.get("model") or ""))[1] or DEFAULT_LEVELS.get(base)
+    return with_level(path, dict(body, model=STUDIO_PREFIX + base), effort)
+
+
+def _studio_failed(resp: Any) -> bool:
+    if resp is None or isinstance(resp, StreamingResponse):
+        return resp is None
+    if resp.status_code in STUDIO_FALLBACK_STATUS:
+        return True
+    if resp.status_code == 400:     # the pinned e-mail has no AI Studio session, or it is switched off
+        try:
+            return (json.loads(resp.body).get("error") or {}).get("type") == "invalid_account"
+        except (ValueError, AttributeError):
+            return False
+    return False
+
+
+async def dispatch(path: str, body: dict, headers: Any) -> tuple[Any, dict]:
+    """(response, body): a response to return as it is, or None and the body to serve on Antigravity."""
+    model = body.get("model")
+    base = shared_base(model)
+    if is_studio_model(model):
+        native_base = resolve_model(str(model)[len(STUDIO_PREFIX):])[0]
+        resp = await STUDIO.forward(path, with_level(path, body, DEFAULT_LEVELS.get(native_base)), headers, pinned_email(model))
+        if base and _studio_failed(resp):
+            native = str(model)[len(STUDIO_PREFIX):]
+            event("warn", "", "%s：AI Studio 这次用不了（HTTP %s），改用 Antigravity 的同一模型 %s" % (model, getattr(resp, "status_code", "-"), native))
+            STUDIO_TRIED.set(True)
+            return None, dict(body, model=native)
+        return resp, body
+    if base and STUDIO.configured and not antigravity_can_serve(base, resolve_model(str(model))[1]):
+        resp = await studio_takeover(path, body, headers, "Antigravity 上有这个模型的账号都在限额 / 冷却")
+        if resp is not None:
+            return resp, body
+    return None, body
+
+
+async def studio_takeover(path: str, body: dict, headers: Any, why: str) -> Any:
+    """The AI Studio answer for a shared model Antigravity cannot serve, or None (then the Antigravity error stands)."""
+    base = shared_base(body.get("model"))
+    pin = PIN.get()
+    if not base or not STUDIO.configured or (pin and not pin[1]) or STUDIO_TRIED.get():
+        return None
+    STUDIO_TRIED.set(True)
+    resp = await STUDIO.forward(path, _studio_body(path, body, base), headers, pin[1] if pin else "")
+    if _studio_failed(resp) or resp.status_code >= 400:
+        if isinstance(resp, StreamingResponse):
+            await resp.aclose()
+        return None
+    event("info", "", "%s：%s，改用 AI Studio 的同一模型" % (body.get("model"), why))
+    return resp
+
+
+async def studio_events(resp: Any, skip: tuple[str, ...]) -> AsyncIterator[str]:
+    """Pass an AI Studio event stream through, minus the opening events the client already got from us."""
+    buf = ""
+    try:
+        async for chunk in resp.body_iterator:
+            buf += chunk.decode("utf-8", "replace") if isinstance(chunk, bytes) else chunk
+            while "\n\n" in buf:
+                block, buf = buf.split("\n\n", 1)
+                if block.strip() and not any(k in block for k in skip):
+                    yield block + "\n\n"
+        if buf.strip():
+            yield buf
+    finally:
+        await resp.aclose()
+
+
 async def run_on(acc: Account, model: str, effort: str | None, system: str, blocks: list[dict], deadline: float) -> AsyncIterator[tuple[str, str]]:
     """One attempt on one account: new session -> model / thought level -> prompt -> stream (kind, text) -> close.
     Blocks of type "media" (video mode) are written to a fresh request directory, sent as resource links to the
@@ -966,6 +1094,7 @@ async def _run_session(acp: AcpProcess, sess: dict, turn: Turn, model: str, effo
     lopt, levels = config_values(opts, "thought_level")
     if levels:
         POOL.model_levels[model] = levels
+    effort = nearest_level(effort, levels)
     if effort and lopt and lopt.get("currentValue") != effort and (not levels or effort in levels):
         await acp.request("session/set_config_option", {"sessionId": sid, "configId": lopt.get("id", "thought_level"), "value": effort}, 60)
     prompt = blocks
@@ -1040,6 +1169,7 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
     model, effort = resolve_model(model_name)
     if effort_override in LEVELS and not re.search(r"-(xhigh|high|medium|low)$", model_name or ""):
         effort = effort_override
+    effort = effort or DEFAULT_LEVELS.get(model)
     wanted = frozenset((model, "%s-%s" % (model, effort)))
     deadline = time.time() + REQUEST_TIMEOUT
     tried: set[str] = set()
@@ -1996,7 +2126,7 @@ async def _read_body(request: Request) -> dict:
 async def chat_completions(request: Request):
     check_key(request)
     body = await _read_body(request)
-    studio = await STUDIO.forward('/v1/chat/completions', body, request.headers, pinned_email(body.get("model")))
+    studio, body = await dispatch('/v1/chat/completions', body, request.headers)
     if studio is not None:
         return studio
     model_name = str(body.get("model") or DEFAULT_MODEL)
@@ -2049,6 +2179,12 @@ async def chat_completions(request: Request):
                     yield "data: %s\n\n" % json.dumps({"id": cid, "object": "chat.completion.chunk", "created": created, "model": model_name,
                                                        "choices": [], "usage": usage_obj(u, "".join(full))})
             except AcpError as e:
+                take = await studio_takeover("/v1/chat/completions", body, request.headers, "Antigravity 没能回答（%s）" % e.kind) \
+                    if not full and e.kind in SHARED_FALLBACK_KINDS else None
+                if take is not None:     # AI Studio's stream ends with its own [DONE]
+                    async for block in studio_events(take, ()):
+                        yield block
+                    return
                 yield "data: %s\n\n" % json.dumps({"error": {"message": str(e), "type": e.kind.lower(), "code": e.kind}}, ensure_ascii=False)
             except Exception as e:  # noqa: BLE001
                 log.exception("stream failed")
@@ -2064,6 +2200,10 @@ async def chat_completions(request: Request):
             elif kind == "usage":
                 u.add(text)
     except AcpError as e:
+        take = await studio_takeover("/v1/chat/completions", body, request.headers, "Antigravity 没能回答（%s）" % e.kind) \
+            if e.kind in SHARED_FALLBACK_KINDS else None
+        if take is not None:
+            return take
         return JSONResponse({"error": {"message": str(e), "type": e.kind.lower(), "code": e.kind}}, status_code=ERR_STATUS.get(e.kind, 502))
     raw = "".join(parts)
     content, calls = parse_tool_calls(raw) if use_tools else (raw, None)
@@ -2088,7 +2228,7 @@ ANTHROPIC_ERR = {"QUOTA": (429, "rate_limit_error"), "RATE_LIMIT": (429, "rate_l
 async def messages(request: Request):
     check_key(request)
     body = await _read_body(request)
-    studio = await STUDIO.forward('/v1/messages', body, request.headers, pinned_email(body.get("model")))
+    studio, body = await dispatch('/v1/messages', body, request.headers)
     if studio is not None:
         return studio
     model_name = str(body.get("model") or DEFAULT_MODEL)
@@ -2156,6 +2296,12 @@ async def messages(request: Request):
                                            "usage": usage_obj(u, "".join(full))})
                 yield ev("message_stop", {"type": "message_stop"})
             except AcpError as e:
+                take = await studio_takeover("/v1/messages", body, request.headers, "Antigravity 没能回答（%s）" % e.kind) \
+                    if not full and e.kind in SHARED_FALLBACK_KINDS else None
+                if take is not None:     # we already sent message_start; AI Studio's own is dropped
+                    async for block in studio_events(take, ("event: message_start", "event: ping")):
+                        yield block
+                    return
                 yield ev("error", {"type": "error", "error": {"type": ANTHROPIC_ERR.get(e.kind, (0, "api_error"))[1], "message": str(e)}})
             except Exception as e:  # noqa: BLE001
                 log.exception("stream failed")
@@ -2170,6 +2316,10 @@ async def messages(request: Request):
             elif kind == "usage":
                 u.add(text)
     except AcpError as e:
+        take = await studio_takeover("/v1/messages", body, request.headers, "Antigravity 没能回答（%s）" % e.kind) \
+            if e.kind in SHARED_FALLBACK_KINDS else None
+        if take is not None:
+            return take
         status, etype = ANTHROPIC_ERR.get(e.kind, (502, "api_error"))
         return JSONResponse({"type": "error", "error": {"type": etype, "message": str(e)}}, status_code=status)
     raw = "".join(parts)
@@ -2204,7 +2354,7 @@ async def responses(request: Request):
     """OpenAI Responses API (Codex CLI and other newer OpenAI clients): text, images, function tools, custom tools."""
     check_key(request)
     body = await _read_body(request)
-    studio = await STUDIO.forward('/v1/responses', body, request.headers, pinned_email(body.get("model")))
+    studio, body = await dispatch('/v1/responses', body, request.headers)
     if studio is not None:
         return studio
     model_name = str(body.get("model") or DEFAULT_MODEL)
@@ -2306,6 +2456,12 @@ async def responses(request: Request):
                     out_items.append(item)
                 yield ev("response.completed", {"response": resp("completed", out_items, usage_obj(u, "".join(full)))})
             except AcpError as e:
+                take = await studio_takeover("/v1/responses", body, request.headers, "Antigravity 没能回答（%s）" % e.kind) \
+                    if not full and e.kind in SHARED_FALLBACK_KINDS else None
+                if take is not None:     # we already sent response.created / in_progress; AI Studio's own are dropped
+                    async for block in studio_events(take, ("event: response.created", "event: response.in_progress")):
+                        yield block
+                    return
                 yield ev("response.failed", {"response": resp("failed", out_items, error={"code": RESPONSES_ERR.get(e.kind, "server_error"), "message": str(e)})})
             except Exception as e:  # noqa: BLE001
                 log.exception("stream failed")
@@ -2320,6 +2476,10 @@ async def responses(request: Request):
             elif kind == "usage":
                 u.add(text)
     except AcpError as e:
+        take = await studio_takeover("/v1/responses", body, request.headers, "Antigravity 没能回答（%s）" % e.kind) \
+            if e.kind in SHARED_FALLBACK_KINDS else None
+        if take is not None:
+            return take
         return JSONResponse({"error": {"message": str(e), "type": e.kind.lower(), "code": RESPONSES_ERR.get(e.kind, "server_error")}},
                             status_code=ERR_STATUS.get(e.kind, 502))
     raw = "".join(parts)

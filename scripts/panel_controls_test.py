@@ -126,7 +126,7 @@ with tempfile.TemporaryDirectory() as d:
     by = {a['name']: a for a in view['accounts']}
     ok(by['g9']['studio_link'] == 'linked' and by['g9']['studio']['disabled'] is True and by['g9']['enabled'] is True
        and 'SECRET' not in json.dumps(view), 'a switched-off AI Studio session still shows on its account card, with no secret')
-    r = client.post('/v1/chat/completions', json={'model': 'aistudio/gemini-4-hydrogen', 'messages': [{'role': 'user', 'content': 'x'}]},
+    r = client.post('/v1/chat/completions', json={'model': 'aistudio/gemini-4-carbon', 'messages': [{'role': 'user', 'content': 'x'}]},
                     headers={'Authorization': 'Bearer client-key', 'X-ACP-Account': 'g9'})
     ok(r.status_code == 400 and 'switched off' in r.json()['error']['message'] and S['gen'] == [],
        'a request pinned to an account whose AI Studio is off is refused, never sent to another account')

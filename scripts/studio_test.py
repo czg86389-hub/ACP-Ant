@@ -207,7 +207,7 @@ with tempfile.TemporaryDirectory() as d:
     r = client.post('/v1/chat/completions', json={'model': 'aistudio/gemini-4-hydrogen', 'messages': [{'role': 'user', 'content': 'x'}]},
                     headers={**key, 'X-ACP-Account': 'g9'})
     ok(r.status_code == 200 and r.headers['x-acp-upstream-account'] == 'main@example.invalid', 'gateway: an Antigravity account name maps to its e-mail\'s AI Studio account')
-    r = client.post('/v1/chat/completions', json={'model': 'aistudio/gemini-4-hydrogen', 'messages': [{'role': 'user', 'content': 'x'}]},
+    r = client.post('/v1/chat/completions', json={'model': 'aistudio/gemini-4-carbon', 'messages': [{'role': 'user', 'content': 'x'}]},
                     headers={**key, 'X-ACP-Account': 'g8'})
     ok(r.status_code == 400, 'gateway: an account without an AI Studio login is refused for aistudio/ models')
     models = client.get('/v1/models', headers=key).json()['data']

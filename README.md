@@ -284,6 +284,8 @@ ACP 协议本身只能让 Antigravity 调用它自己那边的工具，不能把
 
 - 普通模型名（如 `gemini-3.8-flash-medium`）→ Antigravity（不变）
 - `aistudio/<模型名>`（如 `aistudio/gemini-3.8-flash`、`aistudio/gemini-4-hydrogen`）→ AI Studio，模型名原样使用，不会悄悄换成别的模型
+- **两路额度通用（1.5.5 起）**：`gemini-3.8-flash`、`gemini-4-hydrogen`、`gemini-4-neon` 两边是同一个模型。指定的那一路到了限额、冷却中或用不了时，同一个请求自动改用另一路的同一模型（`aistudio/gemini-4-neon` ↔ `gemini-4-neon`），在开始输出答案之前切换；指定了 `X-ACP-Account` 时只在这个邮箱自己的两路之间切换。名单用 `AGY_SHARED_MODELS` 改（逗号分隔，留空 = 关闭）。
+- **默认思考档位（1.5.5 起）**：没有指定档位时，`gemini-4-neon` / `gemini-4-hydrogen` 用 `xhigh`，`gemini-3.8-flash` 用 `high`（两路一样）；模型名带档位或传了 `reasoning_effort` 时照客户端的。用 `AGY_DEFAULT_LEVELS` 改（留空 = 用模型自己的默认）。
 
 启用（需要 Docker）：
 
@@ -491,7 +493,7 @@ All settings are listed in [gateway.env.example](gateway.env.example).
 
 ### AI Studio as a second source (optional, since 1.5.0)
 
-Besides Antigravity, the gateway can serve **Google AI Studio** through [AIStudio2API](https://github.com/Mag1cFall/AIStudio2API). Same base URL and key: normal model names go to Antigravity, `aistudio/<model>` goes to AI Studio (the model name is used as is, never swapped). Enable it with `/opt/acp-ant/aistudio.sh setup` (needs Docker; starts a dedicated AIStudio2API container on 127.0.0.1:2051), then in the web panel click **＋ 接入 AI Studio**, enter the Google e-mail and sign in inside the **server-side browser** shown in the panel. Server-side sign-ins are not bound to any PC; cookies copied from Windows Chrome are device-bound and expire after about 2 hours without that PC. Accounts of both sources are matched by verified e-mail; `X-ACP-Account: <name or e-mail>` pins a request to one account. Google does not report AI Studio's remaining quota, so the panel shows it as unknown plus today's usage and any limits Google reported. Disable with `aistudio.sh remove`.
+Besides Antigravity, the gateway can serve **Google AI Studio** through [AIStudio2API](https://github.com/Mag1cFall/AIStudio2API). Same base URL and key: normal model names go to Antigravity, `aistudio/<model>` goes to AI Studio (the model name is used as is, never swapped). Enable it with `/opt/acp-ant/aistudio.sh setup` (needs Docker; starts a dedicated AIStudio2API container on 127.0.0.1:2051), then in the web panel click **＋ 接入 AI Studio**, enter the Google e-mail and sign in inside the **server-side browser** shown in the panel. Server-side sign-ins are not bound to any PC; cookies copied from Windows Chrome are device-bound and expire after about 2 hours without that PC. Accounts of both sources are matched by verified e-mail; `X-ACP-Account: <name or e-mail>` pins a request to one account. Google does not report AI Studio's remaining quota, so the panel shows it as unknown plus today's usage and any limits Google reported. Since 1.5.5, `gemini-3.8-flash`, `gemini-4-hydrogen` and `gemini-4-neon` share quota across both sources: when the named source is at its limit, cooling down or unavailable, the same request is served by the other one (`aistudio/gemini-4-neon` ↔ `gemini-4-neon`), switching only before any answer was sent; set the list with `AGY_SHARED_MODELS` (empty = off). Without a requested thought level, `gemini-4-neon` / `gemini-4-hydrogen` use `xhigh` and `gemini-3.8-flash` uses `high` on both sources (`AGY_DEFAULT_LEVELS`). Disable with `aistudio.sh remove`.
 
 ### 🎬 Recommended: COOL AI — AI video & image studio for e-commerce
 

@@ -3,6 +3,11 @@
 网页控制面板会定期读取这个文件（只读取，不上传任何数据）：这里出现比你正在运行的版本更新的版本号时，面板顶部会提示，
 用 `git clone` + `./install.sh` 装的可以在面板里一键更新。格式：`## 版本号 — 日期`，下面每行一条 `- 改动`。
 
+## 1.5.5 — 2026-11-21
+- 新：两路额度通用。`gemini-3.8-flash`、`gemini-4-hydrogen`、`gemini-4-neon` 在 Antigravity 和 AI Studio 里是同一个模型，现在两边的额度可以互相顶上：用 `aistudio/gemini-4-neon` 时 AI Studio 到了限额、冷却中、没登录或连不上，同一个请求自动改用 Antigravity 的 `gemini-4-neon`；用 `gemini-4-neon` 时 Antigravity 上有这个模型的账号都在限额 / 冷却，或者最后一个账号在这次请求中用完了额度，就改用 AI Studio 的同一模型（思考档位保留）。三种接口、流式和非流式都支持；流式在开始输出答案之前才会切换，不会把两边的回答拼在一起。用 `X-ACP-Account` 指定账号时，只在这个邮箱自己的两路之间切换。每次切换都记在面板「最近事件」里。用 `AGY_SHARED_MODELS` 可以改这份模型名单（逗号分隔，留空 = 关闭）。
+- 新：默认思考档位。请求没有指定档位时，`gemini-4-neon` 和 `gemini-4-hydrogen` 用 `xhigh`，`gemini-3.8-flash` 用 `high`（Antigravity 和 AI Studio 两边都一样）；模型名带档位（如 `gemini-3.8-flash-medium`）或客户端传了 `reasoning_effort` 时照客户端的。账号的模型没有这一档时用它有的最接近的低一档（xhigh → high → medium）。用 `AGY_DEFAULT_LEVELS` 改（如 `gemini-4-neon=xhigh,gemini-3.8-flash=high`，留空 = 用模型自己的默认）。
+- 新增离线测试 `scripts/shared_quota_test.py`。
+
 ## 1.5.4 — 2026-11-20
 - 修：没有启用 AI Studio 第二路的网关，点「＋ 接入 AI Studio」会打开登录窗口并一直显示「正在启动服务器浏览器」，原因只在底部一行小字里。现在直接说明需要先在服务器上运行 `aistudio.sh setup`（按这台网关的实际安装目录给出命令）；登录窗口启动失败时也会把原因显示在窗口中间。
 - 修：`aistudio.sh setup` / `remove` 最后重启网关时写死了服务名 `acp-ant`，服务名不同的安装（手动部署时起了别的名字）会在这一步报错。现在依次用 `ACPANT_SERVICE`、`acp-ant`、或启动命令在安装目录里的那个服务。
