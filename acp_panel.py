@@ -783,7 +783,7 @@ async def api_overview(request: Request):
     return {"server": {"started": STARTED, "now": time.time(), "accounts": len(accs), "usable": sum(1 for a in accs if a["usable"]),
                        "inflight": sum(a["inflight"] for a in accs), "waiting": core.POOL.waiting,
                        "per_account": core.POOL.limit, "per_account_default": core.PER_ACCOUNT, "require_proxy": core.REQUIRE_PROXY,
-                       "agy": core.AGY, "initial_password": os.path.exists(init_pw_file()), "version": core.__version__,
+                       "agy": core.AGY, "root": core.ROOT, "initial_password": os.path.exists(init_pw_file()), "version": core.__version__,
                        "fusion": getattr(core, "__fusion__", "")},
             "update": update_view(), "studio": studio,
             "today": today, "accounts": accs, "settings": STATE["settings"]}

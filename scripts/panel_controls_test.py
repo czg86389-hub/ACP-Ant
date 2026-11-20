@@ -148,7 +148,7 @@ script = re.search(r'<script>(.*)</script>', html, re.S).group(1)
 code = r"""
 const vm=require('vm'),assert=require('assert'),fs=require('fs');const s=fs.readFileSync(process.argv[1],'utf8');
 const names=['ago','until','num','kindText','quotaHtml','when','studioState','studioQuota','studioBody','studioBtn','switchHtml','studioSwitch',
- 'agModelsHtml','studioHtml','studioOnlyHtml','cardHtml','hayOf','studioHay','matches'];
+ 'agModelsHtml','studioHtml','studioOnlyHtml','cardHtml','hayOf','studioHay','matches','studioReady'];
 const src=names.map(n=>{const i=s.indexOf('function '+n+'(');assert(i>=0,n);let d=0,j=s.indexOf('{',i);for(let k=j;k<s.length;k++){if(s[k]==='{')d++;if(s[k]==='}'&&--d===0)return s.slice(i,k+1);}}).join('\n');
 const consts=s.match(/const (GROUP|WIN|KIND) = [^\n]*;/g).join('\n');
 const c={esc:x=>String(x??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])),copy(){},Date,Math,String,Number,isNaN,
@@ -173,6 +173,8 @@ c.QUERY='g9 us';assert(c.matches(c.hayOf(base)),'several words must all match');
 c.QUERY='已关闭';assert(c.matches(c.hayOf({...base,enabled:false,status_text:'已关闭'}))&&!c.matches(c.hayOf(base)),'search by state');
 c.QUERY='solo';assert(c.matches(c.studioHay({email:'solo@example.invalid'})),'AI-Studio-only cards are searchable');
 c.QUERY='';assert(c.matches(c.hayOf(base)),'empty search shows everything');
+let shown='';c.openModal=x=>{shown=x;};assert(c.studioReady()===true&&shown==='','configured: AI Studio login opens normally');
+c.DATA={studio:{configured:false,error:''},server:{per_account:3,root:'/opt/agy'}};assert(c.studioReady()===false&&shown.includes('/opt/agy/aistudio.sh setup'),'not configured: explains the setup with this install path instead of opening a login');
 console.log('PANEL_CONTROLS_PASS');
 """
 with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as f:

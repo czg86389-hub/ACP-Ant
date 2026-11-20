@@ -265,6 +265,7 @@ function studioBody(s) {
 }
 let LV = null;
 function liveLoginModal(email) {
+  if (!studioReady()) return;
   openModal('<h3>' + esc(email) + ' · 在服务器浏览器里登录 AI Studio</h3>' +
     '<p class="small mute" style="margin:4px 0">先用鼠标点一下画面里的输入框，再直接打字；粘贴用 Ctrl+V。请登录 <b>' + esc(email) + '</b>，按提示完成验证和 Google Drive 授权，完成后自动关闭。登录的不是这个邮箱会被拒绝，原会话不变。 <button class="small" id="lvZoom">按原始大小显示</button></p>' +
     '<div id="lvStage" style="position:relative;min-height:240px;background:#000;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center">' +
@@ -326,9 +327,19 @@ function liveLoginModal(email) {
         else if (p.state === "failed" || p.state === "cancelled") { st.done = true; clearInterval(st.poll); try { st.ws.close(); } catch (e) {} LV = null; res('<span class="err">' + esc(p.error || "登录没有完成") + "</span>"); $("#lvCancel").textContent = "关闭"; $("#lvCancel").onclick = () => { closeModal(); refresh(); }; }
       } catch (e) {}
     }, 3000);
-  }).catch(e => { res('<span class="err">' + esc(e.message) + "</span>"); $("#lvCancel").textContent = "关闭"; $("#lvCancel").onclick = () => { closeModal(); }; });
+  }).catch(e => { $("#lvWait").textContent = "服务器浏览器没有打开：" + e.message; res('<span class="err">' + esc(e.message) + "</span>"); $("#lvCancel").textContent = "关闭"; $("#lvCancel").onclick = () => { closeModal(); }; });
+}
+function studioReady() {
+  if (DATA && DATA.studio && DATA.studio.configured) return true;
+  openModal('<h3>这台网关还没有启用 AI Studio</h3><p>AI Studio 第二路是可选功能，需要先在服务器上装一次（需要 Docker，会启动一个专用的 AIStudio2API 容器）：</p>' +
+    '<pre>sudo ' + esc((DATA && DATA.server && DATA.server.root) || "/opt/acp-ant") + '/aistudio.sh setup</pre>' +
+    '<p class="small mute">装好后刷新面板，再点「＋ 接入 AI Studio」在服务器浏览器里登录。不装也不影响 Antigravity。详见 README「AI Studio 第二路」。</p>' +
+    (DATA && DATA.studio && DATA.studio.error ? '<p class="small err">' + esc(DATA.studio.error) + "</p>" : "") +
+    '<div class="foot"><button class="primary" onclick="closeModal()">知道了</button></div>');
+  return false;
 }
 function addStudioModal() {
+  if (!studioReady()) return;
   openModal('<h3>接入 AI Studio 账号</h3><div class="field"><label>Google 邮箱（登录时会核对，必须是这个邮箱）</label><input id="asEmail" placeholder="name@gmail.com" autocomplete="off"></div>' +
     '<p class="small mute">接着会在服务器上打开一个浏览器，你在面板里登录这个 Google 账号。这个邮箱已有 Antigravity 账号时，AI Studio 自动走同一个代理出口。</p>' +
     '<p id="asRes" class="small"></p><div class="foot"><button onclick="closeModal()">取消</button><button class="primary" id="asGo">在服务器浏览器里登录</button></div>');
@@ -337,6 +348,7 @@ function addStudioModal() {
     liveLoginModal(e); };
 }
 function studioModal(email) {
+  if (!studioReady()) return;
   openModal("<h3>" + (email ? esc(email) + " 接入 / 重新登录 AI Studio" : "接入 AI Studio 会话") + "</h3>" +
     (email ? '<div class="banner" style="margin-bottom:10px"><b>推荐：</b>在服务器浏览器里登录一次，会话不绑定你的电脑，电脑关了也能用。<br><button class="primary" style="margin-top:6px" onclick="liveLoginModal(\'' + esc(email) + '\')">在服务器浏览器里登录</button></div><p class="small mute">或者粘贴 Cookie（Windows 版 Chrome 导出的会话绑定在那台电脑上，没有浏览器助手持续推送时约 2 小时失效）：</p>' : "") +
     '<ol class="small"><li>在已经登录' + (email ? " <b>" + esc(email) + "</b> " : "这个 Google 账号") + '、并且能正常打开 gemini.google.com 的浏览器里，用 Cookie 导出扩展（例如 Cookie-Editor）把 <b>google.com</b> 的全部 Cookie 导出为 JSON。</li>' +

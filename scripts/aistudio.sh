@@ -21,14 +21,30 @@ if ! docker info >/dev/null 2>&1; then
 fi
 [ -d "$ROOT" ] || die "$ROOT 不存在：先用 ./install.sh 安装 ACP-Ant（或设置 AGY_ROOT）"
 
+# The gateway's systemd unit: ACPANT_SERVICE, else acp-ant, else the unit whose command runs from $ROOT
+# (installs that were set up by hand under another name).
+service_name() {
+  local scope=$1 u
+  if [ -n "${ACPANT_SERVICE:-}" ]; then echo "$ACPANT_SERVICE"; return; fi
+  if systemctl $scope cat acp-ant >/dev/null 2>&1; then echo acp-ant; return; fi
+  for u in $(systemctl $scope list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}'); do
+    if systemctl $scope cat "$u" 2>/dev/null | grep -E '^ExecStart=' | grep -qF -- "$ROOT"; then echo "${u%.service}"; return; fi
+  done
+}
+
 restart_gateway() {
-  local mode
+  local mode svc
   mode=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("mode",""))' "$ROOT/install-info.json" 2>/dev/null || true)
   if [ "$mode" = "system" ]; then
-    if [ "$(id -u)" = 0 ]; then systemctl restart acp-ant; else sudo systemctl restart acp-ant; fi
-  elif [ "$mode" = "user" ]; then systemctl --user restart acp-ant
+    svc=$(service_name "")
+    [ -n "$svc" ] || { echo "没有找到网关的 systemd 服务，请手动重启网关（或设置 ACPANT_SERVICE）"; return; }
+    if [ "$(id -u)" = 0 ]; then systemctl restart "$svc"; else sudo systemctl restart "$svc"; fi
+  elif [ "$mode" = "user" ]; then
+    svc=$(service_name --user)
+    [ -n "$svc" ] || { echo "没有找到网关的 systemd 服务，请手动重启网关（或设置 ACPANT_SERVICE）"; return; }
+    systemctl --user restart "$svc"
   else echo "请手动重启网关，使配置生效"; return; fi
-  say "网关已重启"
+  say "网关（$svc）已重启"
 }
 
 case "${1:-}" in
