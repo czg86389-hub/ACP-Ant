@@ -63,7 +63,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from studio_provider import PREFIX as STUDIO_PREFIX, STUDIO, is_studio_model
 
-__version__ = "1.5.5"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
+__version__ = "1.5.6"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
 
 log = logging.getLogger("acp-ant")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -277,6 +277,8 @@ def classify(message: str) -> str:
         return "BAD_REQUEST"   # the request itself is wrong; another account would fail the same way
     if re.search(r"authentication required|not logged in|unauthenticated|sign in|invalid_grant|token.*(expired|revoked)", m):
         return "AUTH"
+    if re.search(r"model[_ -]?capacity[_ -]?exhausted|selected model is at capacity|no available (?:model )?instances", m):
+        return "RATE_LIMIT"
     if re.search(r"quota|resource.?exhausted|limit reached|exceeded your|usage limit", m):
         return "QUOTA"
     if re.search(r"rate.?limit|429|too many requests|overloaded|capacity|unavailable|503", m):
@@ -572,8 +574,9 @@ class AcpProcess:
         try:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
-            self.pending.pop(rid, None)
             raise AcpError(f"{method} timed out ({timeout:.0f}s)", "TIMEOUT")
+        finally:
+            self.pending.pop(rid, None)
 
     async def notify(self, method: str, params: dict) -> None:
         await self._send({"jsonrpc": "2.0", "method": method, "params": params})
@@ -884,6 +887,7 @@ def pinned_email(model: Any) -> str:
 # ------------------------------------------------------------------------------- quota shared by both sources
 STUDIO_FALLBACK_STATUS = {403, 429, 500, 502, 503, 504}     # AI Studio limit / refusal / cooling / service down
 STUDIO_TRIED: contextvars.ContextVar = contextvars.ContextVar("acp_studio_tried", default=False)   # no ping-pong
+STOP_ON_TOOLS: contextvars.ContextVar[bool] = contextvars.ContextVar("acp_stop_on_tools", default=False)
 SHARED_FALLBACK_KINDS = ("QUOTA", "RATE_LIMIT", "UPSTREAM_LIMIT", "NO_ACCOUNT", "VERIFY")
 
 
@@ -1070,8 +1074,10 @@ def write_media(blocks: list[dict], req_dir: str) -> tuple[list[dict], set[str]]
 
 
 async def _run_session(acp: AcpProcess, sess: dict, turn: Turn, model: str, effort: str | None, blocks: list[dict],
-                       deadline: float, has_media: bool) -> AsyncIterator[tuple[str, str]]:
+                       deadline: float, has_media: bool, stop_on_tools: bool | None = None) -> AsyncIterator[tuple[str, str]]:
     """model / thought level -> prompt -> stream (kind, text); auto-continues after max_tokens."""
+    if stop_on_tools is None:
+        stop_on_tools = STOP_ON_TOOLS.get()
     sid = sess["sessionId"]
     opts = sess.get("configOptions") or []
     mopt, offered = config_values(opts, "model")
@@ -1100,49 +1106,108 @@ async def _run_session(acp: AcpProcess, sess: dict, turn: Turn, model: str, effo
     prompt = blocks
     held: list[tuple[str, str]] = []   # hold the first ~400 chars so canned error replies can be recognised
     held_len, released = 0, False
+    acc_text = ""
+
+    async def _abort_turn(fut_obj: asyncio.Future) -> None:
+        try:
+            await acp.notify("session/cancel", {"sessionId": sid})
+        except Exception:  # noqa: BLE001
+            pass
+        if not fut_obj.done():
+            fut_obj.cancel()
+            try:
+                await fut_obj
+            except (asyncio.CancelledError, Exception):
+                pass
+
     for i in range(MAX_CONTINUE + 1):
         fut = asyncio.ensure_future(acp.request("session/prompt", {"sessionId": sid, "prompt": prompt}, max(5.0, deadline - time.time())))
-        while True:
-            getter = asyncio.ensure_future(turn.queue.get())
-            done, _ = await asyncio.wait({fut, getter}, timeout=max(0.1, deadline - time.time()), return_when=asyncio.FIRST_COMPLETED)
-            if getter in done:
-                item = getter.result()
-                if item[0] == "violation":
-                    await acp.notify("session/cancel", {"sessionId": sid})
-                    fut.cancel()
-                    raise violation_error(item[1])
-                if released or item[0] != "text":
-                    yield item
-                else:
-                    held.append(item)
-                    held_len += len(item[1])
-                    joined = "".join(t for _k, t in held)
-                    canned = could_be_canned(joined)
-                    err = soft_error(joined) if (held_len >= 400 or canned) else None
-                    if err:
-                        await acp.notify("session/cancel", {"sessionId": sid})
-                        fut.cancel()
-                        raise err
-                    if held_len >= 400 or not canned:
-                        for h in held:
-                            yield h
-                        held, released = [], True
-                continue
-            getter.cancel()
-            if fut in done:
-                while not turn.queue.empty():
-                    item = turn.queue.get_nowait()
+        getter: asyncio.Future | None = None
+        tool_done = False
+        try:
+            while True:
+                getter = asyncio.ensure_future(turn.queue.get())
+                done, _ = await asyncio.wait({fut, getter}, timeout=max(0.1, deadline - time.time()), return_when=asyncio.FIRST_COMPLETED)
+                if getter in done:
+                    item = getter.result()
+                    getter = None
                     if item[0] == "violation":
+                        await _abort_turn(fut)
                         raise violation_error(item[1])
+                    if stop_on_tools and item[0] == "text" and item[1]:
+                        prev_len = len(acc_text)
+                        acc_text += item[1]
+                        end = tool_calls_end(acc_text)
+                        if end is not None:
+                            # ACP has no stop_sequences: once a valid </tool_calls> block closes, cancel immediately
+                            # so the model cannot keep hallucinating <tool_result> turns that would be discarded anyway.
+                            keep = item[1][:max(0, end - prev_len)]
+                            if not released:
+                                if keep:
+                                    held.append(("text", keep))
+                                for h in held:
+                                    yield h
+                                held, released = [], True
+                            elif keep:
+                                yield ("text", keep)
+                            await _abort_turn(fut)
+                            return
                     if released or item[0] != "text":
                         yield item
                     else:
                         held.append(item)
-                break
-            if time.time() >= deadline:
-                await acp.notify("session/cancel", {"sessionId": sid})
+                        held_len += len(item[1])
+                        joined = "".join(t for _k, t in held)
+                        canned = could_be_canned(joined)
+                        err = soft_error(joined) if (held_len >= 400 or canned) else None
+                        if err:
+                            await _abort_turn(fut)
+                            raise err
+                        if held_len >= 400 or not canned:
+                            for h in held:
+                                yield h
+                            held, released = [], True
+                    continue
+                getter.cancel()
+                try:
+                    await getter
+                except asyncio.CancelledError:
+                    pass
+                getter = None
+                if fut in done:
+                    while not turn.queue.empty():
+                        item = turn.queue.get_nowait()
+                        if item[0] == "violation":
+                            raise violation_error(item[1])
+                        if stop_on_tools and item[0] == "text" and item[1]:
+                            prev_len = len(acc_text)
+                            acc_text += item[1]
+                            end = tool_calls_end(acc_text)
+                            if end is not None:
+                                keep = item[1][:max(0, end - prev_len)]
+                                if not released:
+                                    if keep:
+                                        held.append(("text", keep))
+                                    for h in held:
+                                        yield h
+                                    held, released = [], True
+                                elif keep:
+                                    yield ("text", keep)
+                                tool_done = True
+                                break
+                        if released or item[0] != "text":
+                            yield item
+                        else:
+                            held.append(item)
+                    break
+                if time.time() >= deadline:
+                    await _abort_turn(fut)
+                    raise AcpError("generation timed out (%.0fs)" % REQUEST_TIMEOUT, "TIMEOUT")
+        finally:
+            if getter is not None and not getter.done():
+                getter.cancel()
+            if not fut.done():
                 fut.cancel()
-                raise AcpError("generation timed out (%.0fs)" % REQUEST_TIMEOUT, "TIMEOUT")
         result = fut.result()
         if held and not released:
             err = soft_error("".join(t for _k, t in held) + "\n")
@@ -1154,6 +1219,8 @@ async def _run_session(acp: AcpProcess, sess: dict, turn: Turn, model: str, effo
                 held, released = [], True
         if isinstance(result.get("usage"), dict):
             yield "usage", json.dumps(result["usage"])
+        if tool_done:
+            break
         stop = result.get("stopReason")
         if stop == "max_tokens" and i < MAX_CONTINUE:
             prompt = [{"type": "text", "text": "Continue exactly where you stopped. Do not repeat anything already written."}]
@@ -1187,12 +1254,13 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
             break
         tried.add(acc.name)
         emitted = False
-        tok_in = tok_out = 0
+        tok_in = tok_out = out_chars = 0
         t0 = time.time()
         try:
             async for kind, text in run_on(acc, model, effort, system, blocks, deadline):
                 if kind == "text" and text:
                     emitted = True
+                    out_chars += len(text)
                 elif kind == "usage":
                     try:
                         u = json.loads(text)
@@ -1201,6 +1269,8 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
                     except (ValueError, TypeError):
                         pass
                 yield kind, text, acc.name
+            if tok_in == 0 and tok_out == 0 and out_chars:
+                tok_in, tok_out = est_prompt(system, blocks), max(1, out_chars // 3)
             acc.ok += 1
             acc.last_ok_at = time.time()
             STATS.record(acc.name, True, tok_in, tok_out)
@@ -1928,20 +1998,7 @@ def _parse_invokes(body: str) -> list[dict]:
     return calls
 
 
-def parse_tool_calls(text: str) -> tuple[str, list[dict] | None]:
-    """Split the model's reply into (text before the block, [{"name", "arguments"(dict|str)}]) or (text, None)."""
-    i = text.find(TAG_OPEN)
-    if i < 0:
-        k = text.find(ALT_OPEN)
-        if k >= 0:
-            calls = _parse_invokes(text[k:])
-            if calls:
-                return re.sub(r"\n?```[a-zA-Z]*\s*$", "", text[:k]).rstrip(), calls
-        return text, None
-    body = text[i + len(TAG_OPEN):]
-    j = body.find(TAG_CLOSE)
-    if j >= 0:
-        body = body[:j]
+def _extract_calls(body: str) -> list[dict]:
     data = _loads_lenient(body)
     if isinstance(data, dict):
         data = data.get("tool_calls") or data.get("calls") or [data]
@@ -1959,6 +2016,60 @@ def parse_tool_calls(text: str) -> tuple[str, list[dict] | None]:
                 pass   # leave the raw string; the client will see what the model wrote
         if name:
             calls.append({"name": str(name), "arguments": args if args is not None else {}})
+    return calls
+
+
+def tool_calls_end(text: str) -> int | None:
+    """Return the index right after a complete, valid </tool_calls> or </function_calls> block, or None.
+    Scans every closing tag occurrence so a literal '</tool_calls>' inside a JSON string argument never stops early."""
+    i = text.find(TAG_OPEN)
+    if i >= 0:
+        pos = i + len(TAG_OPEN)
+        while True:
+            j = text.find(TAG_CLOSE, pos)
+            if j < 0:
+                break
+            if _extract_calls(text[i + len(TAG_OPEN):j]):
+                return j + len(TAG_CLOSE)
+            pos = j + len(TAG_CLOSE)
+    k = text.find(ALT_OPEN)
+    if k >= 0:
+        pos = k + len(ALT_OPEN)
+        while True:
+            j = text.find(ALT_CLOSE, pos)
+            if j < 0:
+                break
+            if _parse_invokes(text[k:j + len(ALT_CLOSE)]):
+                return j + len(ALT_CLOSE)
+            pos = j + len(ALT_CLOSE)
+    return None
+
+
+def parse_tool_calls(text: str) -> tuple[str, list[dict] | None]:
+    """Split the model's reply into (text before the block, [{"name", "arguments"(dict|str)}]) or (text, None)."""
+    i = text.find(TAG_OPEN)
+    if i < 0:
+        k = text.find(ALT_OPEN)
+        if k >= 0:
+            end = tool_calls_end(text[k:])
+            slice_text = text[k:k + end] if end is not None else text[k:]
+            calls = _parse_invokes(slice_text)
+            if calls:
+                return re.sub(r"\n?```[a-zA-Z]*\s*$", "", text[:k]).rstrip(), calls
+        return text, None
+    body = text[i + len(TAG_OPEN):]
+    calls: list[dict] = []
+    pos = 0
+    while True:
+        j = body.find(TAG_CLOSE, pos)
+        if j < 0:
+            break
+        calls = _extract_calls(body[:j])
+        if calls:
+            break
+        pos = j + len(TAG_CLOSE)
+    if not calls and TAG_CLOSE not in body:
+        calls = _extract_calls(body)
     if not calls:
         return text, None
     content = re.sub(r"\n?```[a-zA-Z]*\s*$", "", text[:i]).rstrip()
@@ -2135,6 +2246,7 @@ async def chat_completions(request: Request):
     await fetch_remote_images(msgs)
     system, blocks = to_acp(system, msgs, tools, choice, _json_instruction(body.get("response_format")), body.get("parallel_tool_calls") is not False)
     use_tools = bool(tools) and choice != "none"
+    STOP_ON_TOOLS.set(use_tools)
     effort = body.get("reasoning_effort")
     cid = "chatcmpl-" + uuid.uuid4().hex[:24]
     created = int(time.time())
@@ -2238,6 +2350,7 @@ async def messages(request: Request):
     parallel = not (isinstance(body.get("tool_choice"), dict) and body["tool_choice"].get("disable_parallel_tool_use"))
     system, blocks = to_acp(system, msgs, tools, choice, parallel=parallel)
     use_tools = bool(tools) and choice != "none"
+    STOP_ON_TOOLS.set(use_tools)
     mid = "msg_" + uuid.uuid4().hex[:24]
     prompt_est = est_prompt(system, blocks)
 
@@ -2366,6 +2479,7 @@ async def responses(request: Request):
         {"type": "json_object"} if fmt.get("type") == "json_object" else None)
     system, blocks = to_acp(system, msgs, tools, choice, _json_instruction(rf), body.get("parallel_tool_calls") is not False)
     use_tools = bool(tools) and choice != "none"
+    STOP_ON_TOOLS.set(use_tools)
     effort = (body.get("reasoning") or {}).get("effort")
     rid = "resp_" + uuid.uuid4().hex[:24]
     created = int(time.time())

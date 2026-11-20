@@ -3,6 +3,12 @@
 网页控制面板会定期读取这个文件（只读取，不上传任何数据）：这里出现比你正在运行的版本更新的版本号时，面板顶部会提示，
 用 `git clone` + `./install.sh` 装的可以在面板里一键更新。格式：`## 版本号 — 日期`，下面每行一条 `- 改动`。
 
+## 1.5.6 — 2026-11-21
+- 修：Antigravity 通道在长上下文多轮工具调用（如 `gemini-4-neon` 搭配 Agent 客户端）下响应极慢甚至超时（动辄 85–210 秒）。原因是 ACP 协议没有 `stop_sequences`，模型在写出完整的 `</tool_calls>` 后仍继续凭空续写多轮假 `<tool_result>` 与后续对话，而网关此前一直等到整段无效续写自然结束才返回。现在启用工具调用的请求一旦收到完整且合法的 `</tool_calls>`（或 `</function_calls>`），立即截断其后内容并向 `agy` 发送 `session/cancel` 结束本轮（支持 Chat Completions、Messages、Responses 三种接口的流式与非流式）；同时逐个校验闭合标签，避免参数字符串内恰好包含 `</tool_calls>` 时误截断，既将工具调用耗时从分钟级压回秒级，也避免浪费 Antigravity 额度。
+- 修：上游返回临时容量不足（`MODEL_CAPACITY_EXHAUSTED`、`selected model is at capacity`、`no available model instances`）时优先判为 `RATE_LIMIT`（90 秒短冷却），不再被误判为个人额度耗尽（`QUOTA`，30 分钟冷却）；真正的个人额度耗尽仍按 `QUOTA` 处理。
+- 修：`AcpProcess.request()` 取消时始终清理 `pending` 表，`_run_session()` 在流提前终止时清理未完成的 `Queue.get()` / `session/prompt` 任务，消除 `Task was destroyed but it is pending` 泄漏。
+- 新增离线测试 `scripts/tool_stop_test.py`。
+
 ## 1.5.5 — 2026-11-21
 - 新：两路额度通用。`gemini-3.8-flash`、`gemini-4-hydrogen`、`gemini-4-neon` 在 Antigravity 和 AI Studio 里是同一个模型，现在两边的额度可以互相顶上：用 `aistudio/gemini-4-neon` 时 AI Studio 到了限额、冷却中、没登录或连不上，同一个请求自动改用 Antigravity 的 `gemini-4-neon`；用 `gemini-4-neon` 时 Antigravity 上有这个模型的账号都在限额 / 冷却，或者最后一个账号在这次请求中用完了额度，就改用 AI Studio 的同一模型（思考档位保留）。三种接口、流式和非流式都支持；流式在开始输出答案之前才会切换，不会把两边的回答拼在一起。用 `X-ACP-Account` 指定账号时，只在这个邮箱自己的两路之间切换。每次切换都记在面板「最近事件」里。用 `AGY_SHARED_MODELS` 可以改这份模型名单（逗号分隔，留空 = 关闭）。
 - 新：默认思考档位。请求没有指定档位时，`gemini-4-neon` 和 `gemini-4-hydrogen` 用 `xhigh`，`gemini-3.8-flash` 用 `high`（Antigravity 和 AI Studio 两边都一样）；模型名带档位（如 `gemini-3.8-flash-medium`）或客户端传了 `reasoning_effort` 时照客户端的。账号的模型没有这一档时用它有的最接近的低一档（xhigh → high → medium）。用 `AGY_DEFAULT_LEVELS` 改（如 `gemini-4-neon=xhigh,gemini-3.8-flash=high`，留空 = 用模型自己的默认）。

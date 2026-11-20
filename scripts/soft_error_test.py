@@ -44,6 +44,10 @@ check("normal answer -> not an error", kind("## 视频总览\n- 视频总时长�
 check("answer mentioning a licence later -> not an error", kind("## Overview\n" + "text " * 200 + "you do not have a valid license"), None)
 check("LICENSE maps to HTTP 503", gw.ERR_STATUS.get("LICENSE"), 503)
 check("⚠ start is held back for checking", gw.could_be_canned("⚠ You do not"), True)
+check("MODEL_CAPACITY_EXHAUSTED -> RATE_LIMIT (90s, not 30m QUOTA)", gw.classify("RESOURCE_EXHAUSTED: MODEL_CAPACITY_EXHAUSTED"), "RATE_LIMIT")
+check("selected model is at capacity -> RATE_LIMIT", gw.classify("HTTP 503: Selected model is at capacity"), "RATE_LIMIT")
+check("no available model instances -> RATE_LIMIT", gw.classify("No available model instances right now"), "RATE_LIMIT")
+check("genuine RESOURCE_EXHAUSTED -> QUOTA", gw.classify("RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota)."), "QUOTA")
 
 print("\n%d/%d passed" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)
