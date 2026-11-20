@@ -63,7 +63,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from studio_provider import STUDIO, is_studio_model
 
-__version__ = "1.5.2"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
+__version__ = "1.5.3"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
 
 log = logging.getLogger("acp-ant")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -578,16 +578,32 @@ class AcpProcess:
             await self.ensure()
             if PROCESS_PER_SESSION:
                 return
-            sess = await self.request("session/new", {"cwd": self.cwd, "mcpServers": []}, 120)
-            if sess.get("sessionId"):
-                mopt, self.acc.models = config_values(sess.get("configOptions") or [], "model")
-                for m in self.acc.models:   # thought levels differ per model (Hydrogen adds xhigh); choosing one sends nothing
-                    if m not in POOL.model_levels:
-                        res = await self.request("session/set_config_option", {"sessionId": sess["sessionId"], "configId": (mopt or {}).get("id", "model"), "value": m}, 60)
-                        POOL.model_levels[m] = config_values(res.get("configOptions") or [], "thought_level")[1]
-                await self.request("session/close", {"sessionId": sess["sessionId"]}, 15)
+            await self.read_models()
         except Exception as e:  # noqa: BLE001
             log.info("account %s: prewarm skipped: %s", self.label, str(e)[:160])
+
+    async def read_models(self) -> list[str]:
+        """Open and close one session to learn the models (and their thought levels) this account offers. Nothing is
+        sent to a model, so it costs no quota."""
+        await self.ensure()
+        sess = await self.request("session/new", {"cwd": self.cwd, "mcpServers": []}, 120)
+        sid = sess.get("sessionId")
+        if not sid:
+            raise AcpError("session/new returned no sessionId", "SERVER")
+        try:
+            mopt, models = config_values(sess.get("configOptions") or [], "model")
+            if models:
+                self.acc.models = models
+            for m in models:   # thought levels differ per model (Hydrogen adds xhigh); choosing one sends nothing
+                if m not in POOL.model_levels:
+                    res = await self.request("session/set_config_option", {"sessionId": sid, "configId": (mopt or {}).get("id", "model"), "value": m}, 60)
+                    POOL.model_levels[m] = config_values(res.get("configOptions") or [], "thought_level")[1]
+        finally:
+            try:
+                await self.request("session/close", {"sessionId": sid}, 15)
+            except Exception:  # noqa: BLE001
+                pass
+        return list(self.acc.models)
 
     async def maybe_recycle(self) -> None:
         """Restart a shared process now and then (when idle) so a long-running one never accumulates state."""

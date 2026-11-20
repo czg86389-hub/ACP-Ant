@@ -137,7 +137,9 @@ cat data/panel-initial-password.txt     # 面板初始密码（可能要 sudo）
   面板密码和客户端用的 API 密钥是两回事。
 - **账号卡片**：状态（正常 / 已关闭 / 需要 Google 验证 / 冷却中 / 需要重新登录）、代理和出口 IP、
   **额度**（Gemini 模型、Claude / GPT 模型、Gemini 4 Argon 三组，每组的每周和 5 小时剩余百分比和重置时间）、今天和近 7 天的成功 / 失败次数和 Token 用量、最近错误。
-- **开关**：每个账号右上角一个开关，关掉后这个账号不会再被调用（文件 `accounts/<名字>/disabled`），打开立即恢复。
+- **搜索**：账号多的时候在列表上方搜索名称、邮箱、代理、出口 IP 或状态（按 `/` 快速搜索，`Esc` 清空）。
+- **开关**：每个账号的 Antigravity 和 AI Studio 各一个开关，分开控制。关掉 Antigravity 后这个账号不会再被调用（文件 `accounts/<名字>/disabled`）；关掉 AI Studio 后 `aistudio/` 模型不再用这个账号（代理和登录保持不变）。打开立即恢复。
+- **模型列表**：每个账号显示它支持的 Antigravity 模型和思考档位，AI Studio 一栏显示它的模型；点一下复制。没读到时点「读取模型列表」（开空会话读取，不消耗额度）。
 - **按钮**：检测（真发一句话；Google 要求验证时直接给出验证链接）、刷新额度、重新登录、换代理、清除冷却、删除。
 - **添加账号向导**：填名字和代理 → 自动测出口 IP（同一 IP 被别的账号用过会提醒）→ 点按钮打开 Google 登录页，
   把授权码或落地页网址粘贴回面板 → 确认登录正常后自动开启，不自动读取额度、不发测试消息；要查看额度，在账号卡片上点「刷新额度」；要真发一句话试，在账号卡片上点「检测」。登录全程在你自己的浏览器里完成，面板只转交授权码，不保存。
@@ -457,7 +459,9 @@ ACP-Ant turns Google's official **Antigravity CLI (`agy`)** into a standard LLM 
   - add accounts: test the proxy, then log in with Google through a paste box, or paste the account's refresh_token instead;
   - re-login, change proxy, health-check, clear cooldowns, delete;
   - see per-account quota (weekly and 5-hour windows with reset times) and request / token stats;
-  - turn each account on or off;
+  - search accounts by name, e-mail, proxy, exit IP or state;
+  - switch Antigravity and AI Studio on or off separately for each account;
+  - see the Antigravity models (and thought levels) and AI Studio models each account offers;
   - copy connection info and run a test chat;
   - enable an automatic patrol that reads quota every few hours (free) and can optionally send one tiny prompt a day.
 

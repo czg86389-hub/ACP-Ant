@@ -207,6 +207,8 @@ class StudioProvider:
             if problem:
                 return self._error(503, 'AI Studio account list is unavailable; the requested account cannot be verified')
             account, why = self.match(rows, email)
+            if why == 'disabled':
+                return self._error(400, "The requested account's AI Studio source is switched off in the panel", 'invalid_account')
             if not account:
                 return self._error(400, 'The requested account has no AI Studio session', 'invalid_account')
         try:
@@ -446,7 +448,30 @@ class StudioProvider:
         if not email:
             return '', 'none'
         same = [r for r in rows if str(r.get('email') or '').lower() == email]
+        if same and same[0].get('disabled'):
+            return '', 'disabled'
         return (same[0]['account_id'], '') if same else ('', 'none')
+
+    async def set_enabled(self, email, enabled):
+        """Switch one AIStudio2API account on or off; its proxy, locale and time zone are written back unchanged.
+        Shares the repair lock so an automatic page restart can never undo the owner's choice."""
+        email = (email or '').strip().lower()
+        async with self._heal_lock:
+            client = await self._admin(30)
+            try:
+                accounts = (await client.get('/api/accounts')).json().get('accounts') or []
+                a = next((x for x in accounts if str(x.get('id') or '').lower() == email), None)
+                if a is None:
+                    raise KeyError(email)
+                r = await client.put('/api/accounts/' + quote(a['id'], safe=''), json={
+                    'label': a.get('label') or a['id'], 'enabled': bool(enabled), 'proxy': a.get('proxy') or '',
+                    'locale': a.get('locale') or '', 'timezone': a.get('timezone') or ''})
+                r.raise_for_status()
+            finally:
+                await client.aclose()
+        self.heals.pop(email, None)
+        self._accounts_at = 0.0
+        return bool(enabled)
 
     def start_background(self):
         """Keep the account list / service auto-start running even when nobody has the panel open."""

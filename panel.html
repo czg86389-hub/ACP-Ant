@@ -75,6 +75,14 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 .kv{display:grid;grid-template-columns:110px 1fr auto;gap:8px;align-items:center;margin-top:8px}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{padding:2px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);font-size:12px;cursor:pointer}
+.chip i{font-style:normal;color:var(--mute)}
+.finder{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.finder input{max-width:460px}
+.src{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.src .sp{flex:1}
+.src .switch{transform:scale(.86);transform-origin:right center}
+.src.off b{color:var(--mute)}
+details.small summary{cursor:pointer;color:var(--mute)}
+details.small .chips{margin-top:6px}
 #toast{position:fixed;right:18px;bottom:18px;z-index:40;display:flex;flex-direction:column;gap:8px}
 #toast div{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--acc);padding:10px 14px;border-radius:8px;max-width:420px;box-shadow:0 6px 24px rgba(0,0,0,.3)}
 #toast div.bad{border-left-color:var(--bad)}#toast div.ok{border-left-color:var(--ok)}
@@ -112,6 +120,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
   <main>
     <div id="banner"></div>
     <div class="summary" id="summary"></div>
+    <div class="finder"><input id="accSearch" type="search" autocomplete="off" spellcheck="false" placeholder="搜索账号：名称、邮箱、代理、出口 IP 或状态（按 / 快速搜索，Esc 清空）"><span class="mute small" id="accCount"></span></div>
     <div class="grid" id="accounts"></div>
     <h2>最近事件</h2>
     <div class="card events" id="events"></div>
@@ -181,10 +190,37 @@ function render() {
     ["正在处理 / 同时上限", s.inflight + " / " + s.usable * s.per_account,
      "每个账号同时 " + s.per_account + " 个 · " + (s.waiting ? '<span class="err">排队 ' + s.waiting + " 个</span>" : "无排队")],
   ].map(([a, b, c]) => '<div class="card"><div class="mute small">' + a + '</div><div class="big">' + esc(b) + '</div><div class="mute small">' + c + "</div></div>").join("");
-  $("#accounts").innerHTML = (DATA.accounts.length ? DATA.accounts.map(cardHtml).join("") :
-    '<div class="card">还没有账号。点右上角「＋ 添加账号」，按提示填代理并登录 Google。</div>') +
-    ((DATA.studio && DATA.studio.unlinked) || []).map(studioOnlyHtml).join("");
+  renderAccounts();
 }
+
+// ---------- account search (kept across the 10-second refresh) and open model lists
+let QUERY = "";
+const OPEN = new Set();
+function hayOf(a) {
+  const s = a.studio || {};
+  return [a.name, a.email, a.proxy, a.egress_ip, a.country, a.status_text, a.enabled ? "" : "已关闭 关闭",
+          s.email, s.exit, s.disabled ? "ai studio 已关闭" : ""].join(" ").toLowerCase();
+}
+function studioHay(s) { return [s.email, s.label, s.account_id, s.exit, "仅 ai studio", s.disabled ? "已关闭 关闭" : ""].join(" ").toLowerCase(); }
+function matches(hay) { return QUERY.split(/\s+/).filter(Boolean).every(w => hay.includes(w)); }
+function renderAccounts() {
+  const accs = DATA.accounts || [], only = (DATA.studio && DATA.studio.unlinked) || [];
+  const shownA = accs.filter(a => matches(hayOf(a))), shownS = only.filter(s => matches(studioHay(s)));
+  const total = accs.length + only.length, shown = shownA.length + shownS.length;
+  $("#accCount").textContent = QUERY ? "找到 " + shown + " / " + total + " 个" : (total ? "共 " + total + " 个" : "");
+  $("#accounts").innerHTML = !total ? '<div class="card">还没有账号。点右上角「＋ 添加账号」，按提示填代理并登录 Google。</div>' :
+    !shown ? '<div class="card mute">没有匹配「' + esc(QUERY) + '」的账号。</div>' :
+    shownA.map(cardHtml).join("") + shownS.map(studioOnlyHtml).join("");
+  document.querySelectorAll("#accounts details[data-key]").forEach(d => { d.open = OPEN.has(d.dataset.key); });
+}
+$("#accSearch").addEventListener("input", e => { QUERY = e.target.value.trim().toLowerCase(); if (DATA) renderAccounts(); });
+$("#accSearch").addEventListener("keydown", e => { if (e.key === "Escape") { e.target.value = ""; QUERY = ""; if (DATA) renderAccounts(); } });
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) && $("#appView").style.display !== "none" && $("#mask").style.display !== "flex") {
+    e.preventDefault(); $("#accSearch").focus();
+  }
+});
+document.addEventListener("toggle", e => { const d = e.target; if (d.dataset && d.dataset.key) d.open ? OPEN.add(d.dataset.key) : OPEN.delete(d.dataset.key); }, true);
 
 function quotaHtml(a) {
   if (a.quota_error) return '<div class="row err small">读取额度失败：' + esc(a.quota_error) + "</div>";
@@ -200,7 +236,7 @@ function quotaHtml(a) {
 
 function when(v) { if (!v) return "暂无"; const ts = typeof v === "number" ? v : Date.parse(v) / 1000; return Number.isFinite(ts) ? ago(ts) : "暂无"; }
 function studioState(s) {
-  if (s.disabled) return ["off", "已停用"];
+  if (s.disabled) return ["off", "已关闭（aistudio/ 模型不会用这个账号）"];
   if (s.state === "login_required") return ["error", "需重新登录（已排队自动重建）"];
   if (s.error) return ["warn", s.error];
   if (!s.ready) return ["warn", s.stale ? "状态待刷新" : "未就绪"];
@@ -225,7 +261,7 @@ function studioBody(s) {
     (s.sync_pending ? ' · <span class="mute">等待自动同步</span>' : "") + (s.auto_repairs ? ' · <span class="mute">已自动重建 ' + s.auto_repairs + " 次</span>" : "") + "</div>" +
     (q.service_state && q.service_state !== "RUNNING" ? '<div class="row small err">AI Studio 生成服务未运行（' + esc(q.service_state) + '），网关会在有可用账号后自动启动</div>' : "") +
     studioQuota(q) +
-    '<details class="small"><summary>模型（' + models.length + "）</summary><div class=\"chips\">" + models.map(m => '<span class="chip" onclick="copy(\'aistudio/' + esc(m) + '\')">aistudio/' + esc(m) + "</span>").join("") + "</div></details>";
+    '<details class="small" data-key="st:' + esc(s.email || s.account_id) + '"><summary>AI Studio 模型（' + models.length + "）· 点一下复制</summary><div class=\"chips\">" + models.map(m => '<span class="chip" onclick="copy(\'aistudio/' + esc(m) + '\')">aistudio/' + esc(m) + "</span>").join("") + "</div></details>";
 }
 let LV = null;
 function liveLoginModal(email) {
@@ -323,8 +359,12 @@ function studioModal(email) {
   };
 }
 function studioBtn(email, label) { return ' <button class="small" onclick="studioModal(\'' + esc(email || "") + '\')">' + label + "</button>"; }
+function studioSwitch(s) {
+  return s ? '<span class="sp"></span>' + switchHtml("studio-toggle", 'data-email="' + esc(s.email || s.account_id) + '"', !s.disabled, "AI Studio") : "";
+}
 function studioHtml(a) {
-  const head = '<div class="row small src"><b>AI Studio</b> <span class="mute">第二路 · AIStudio2API</span>' + (DATA.studio && DATA.studio.configured && a.email ? studioBtn(a.email, a.studio ? "重新登录" : "接入") : "") + "</div>";
+  const head = '<div class="row small src' + (a.studio && a.studio.disabled ? " off" : "") + '"><b>AI Studio</b> <span class="mute">第二路 · AIStudio2API</span>' +
+    (DATA.studio && DATA.studio.configured && a.email ? studioBtn(a.email, a.studio ? "重新登录" : "接入") : "") + studioSwitch(a.studio) + "</div>";
   if (!DATA.studio || !DATA.studio.configured) return head + '<div class="row mute small">这台网关还没有接入 AI Studio 通道' + (DATA.studio && DATA.studio.error ? "：" + esc(DATA.studio.error) : "") + "。</div>";
   if (DATA.studio.error) return head + '<div class="row err small">' + esc(DATA.studio.error) + "</div>";
   if (a.studio) return head + studioBody(a.studio);
@@ -333,18 +373,31 @@ function studioHtml(a) {
   return head + '<div class="row mute small">未关联：没有邮箱为 ' + esc(a.email) + " 的 AI Studio 会话。</div>";
 }
 function studioOnlyHtml(s) {
-  return '<div class="card acc"><div class="top"><h3>' + esc(s.email || s.label || s.account_id) + '</h3><span class="pill"><span class="dot"></span>仅 AI Studio</span></div>' +
+  return '<div class="card acc' + (s.disabled ? " off" : "") + '"><div class="top"><h3>' + esc(s.email || s.label || s.account_id) + '</h3><span class="pill"><span class="dot"></span>仅 AI Studio</span></div>' +
     '<div class="row small src"><b>Antigravity</b> <span class="mute">原有一路</span></div><div class="row mute small">未关联：这个邮箱没有 Antigravity 登录，只能调用 aistudio/ 模型。 <button class="small" onclick="addModal(\'' + esc(s.email || "") + '\')">添加 Antigravity 登录</button></div>' +
-    '<div class="row small src"><b>AI Studio</b> <span class="mute">第二路 · AIStudio2API</span>' + studioBtn(s.email, "重新登录") + "</div>" + studioBody(s) + "</div>";
+    '<div class="row small src' + (s.disabled ? " off" : "") + '"><b>AI Studio</b> <span class="mute">第二路 · AIStudio2API</span>' + studioBtn(s.email, "重新登录") + studioSwitch(s) + "</div>" + studioBody(s) + "</div>";
 }
 
+function switchHtml(act, attrs, on, what) {
+  return '<label class="switch" title="' + what + (on ? " 已开启：会被调用（点一下关闭）" : " 已关闭：不会被调用（点一下开启）") + '"><input type="checkbox" data-act="' + act + '" ' + attrs +
+    (on ? " checked" : "") + ' aria-label="' + what + ' 开关"><span></span></label>';
+}
+function agModelsHtml(a) {
+  const n = esc(a.name), ms = a.models || [];
+  const btn = '<button class="small" data-act="models" data-name="' + n + '">' + (ms.length ? "重新读取" : "读取模型列表") + "</button>";
+  if (!ms.length) return '<div class="row small"><span class="mute">模型</span> 还没读到这个账号支持哪些模型 ' + btn + ' <span class="mute">（开一个空会话读取，不消耗额度）</span></div>';
+  return '<details class="small row" data-key="ag:' + n + '"><summary>Antigravity 模型（' + ms.length + "）· 点一下复制</summary><div class=\"chips\">" +
+    ms.map(m => '<span class="chip" title="' + esc(m.levels && m.levels.length ? "思考档位：" + m.levels.join(" / ") + "（模型名后加 -档位 选择）" : m.id) + '" onclick="copy(\'' + esc(m.id) + '\')">' + esc(m.id) +
+      (m.levels && m.levels.length ? " <i>" + esc(m.levels.join("/")) + "</i>" : "") + "</span>").join("") + "</div><div class=\"row\">" + btn + "</div></details>";
+}
 function cardHtml(a) {
   const n = esc(a.name);
   const cool = a.cooldown_s ? "（还剩 " + Math.ceil(a.cooldown_s / 60) + " 分钟）" : "";
-  return '<div class="card acc s-' + a.status + (a.enabled ? "" : " off") + '">' +
-    '<div class="top"><h3>' + n + (a.email && a.email !== a.name.toLowerCase() ? ' <span class="mute small">' + esc(a.email) + "</span>" : "") + '</h3><span class="pill s-' + a.status + '"><span class="dot"></span>' + esc(a.status_text + cool) + "</span>" +
-    '<span class="sp"></span><label class="switch" title="' + (a.enabled ? "已开启：会被调用" : "已关闭：不会被调用") + '"><input type="checkbox" data-act="toggle" data-name="' + n + '"' + (a.enabled ? " checked" : "") + "><span></span></label></div>" +
-    '<div class="row small src"><b>Antigravity</b> <span class="mute">原有一路</span></div>' +
+  const studioOn = !!(a.studio && !a.studio.disabled);
+  return '<div class="card acc s-' + a.status + (a.enabled || studioOn ? "" : " off") + '">' +
+    '<div class="top"><h3>' + n + (a.email && a.email !== a.name.toLowerCase() ? ' <span class="mute small">' + esc(a.email) + "</span>" : "") + "</h3></div>" +
+    '<div class="row small src' + (a.enabled ? "" : " off") + '"><b>Antigravity</b> <span class="mute">原有一路</span> <span class="pill s-' + a.status + '"><span class="dot"></span>' + esc(a.status_text + cool) + "</span>" +
+    '<span class="sp"></span>' + switchHtml("toggle", "data-name=\"" + n + "\"", a.enabled, "Antigravity") + "</div>" +
     '<div class="row small"><span class="mute">代理</span> ' + (a.proxy ? esc(a.proxy) : '<span class="mute">无</span>') +
     (a.egress_ip ? ' · <span class="mute">出口</span> ' + esc(a.egress_ip) + (a.country ? " " + esc(a.country) : "") : "") + "</div>" +
     (a.verify_url ? '<div class="verify small">Google 要求验证这个账号：<a href="' + esc(a.verify_url) + '" target="_blank" rel="noopener">打开验证页面</a>（浏览器要登录的是这个账号用的 Google 账号），验证完点「检测」。</div>' : "") +
@@ -354,6 +407,7 @@ function cardHtml(a) {
     '<div class="row small"><span class="mute">正在处理</span> ' + a.inflight + " / " + DATA.server.per_account + ' <span class="mute">｜上次检测</span> ' + esc(ago(a.last_check_at)) +
     (a.last_check_msg ? "：" + (a.last_check_ok ? "" : '<span class="err">') + esc(a.last_check_msg) + (a.last_check_ok ? "" : "</span>") : "") + "</div>" +
     (a.last_error ? '<div class="row small"><span class="mute">最近错误（' + esc(ago(a.last_error_at)) + '）</span> <span class="err">' + esc(kindText(a.last_error)).slice(0, 220) + "</span></div>" : "") +
+    agModelsHtml(a) +
     studioHtml(a) +
     '<div class="acts">' +
     '<button data-act="check" data-name="' + n + '">检测</button>' +
@@ -379,9 +433,15 @@ function copy(text) { navigator.clipboard.writeText(text).then(() => toast("已�
 // ---------- account actions
 document.addEventListener("change", async e => {
   const el = e.target;
-  if (el.dataset.act !== "toggle") return;
-  try { await api("/accounts/" + el.dataset.name + "/enabled", {body: {enabled: el.checked}}); toast(el.dataset.name + (el.checked ? " 已开启，会被调用" : " 已关闭，不会再被调用"), "ok"); refresh(); }
-  catch (err) { el.checked = !el.checked; toast(err.message, "bad"); }
+  if (el.dataset.act === "toggle") {
+    try { await api("/accounts/" + el.dataset.name + "/enabled", {body: {enabled: el.checked}}); toast(el.dataset.name + " 的 Antigravity" + (el.checked ? " 已开启，会被调用" : " 已关闭，不会再被调用（AI Studio 不受影响）"), "ok"); refresh(); }
+    catch (err) { el.checked = !el.checked; toast(err.message, "bad"); }
+  } else if (el.dataset.act === "studio-toggle") {
+    el.disabled = true;
+    try { await api("/studio/" + encodeURIComponent(el.dataset.email) + "/enabled", {body: {enabled: el.checked}}); toast(el.dataset.email + " 的 AI Studio" + (el.checked ? " 已开启，aistudio/ 模型会用它" : " 已关闭，aistudio/ 模型不再用它（Antigravity 不受影响）"), "ok"); refresh(); }
+    catch (err) { el.checked = !el.checked; toast(err.message, "bad"); }
+    finally { el.disabled = false; }
+  }
 });
 document.addEventListener("click", async e => {
   const b = e.target.closest("button"); if (!b) return;
@@ -391,6 +451,7 @@ document.addEventListener("click", async e => {
     if (act === "check") { const r = await busy(b, () => api("/accounts/" + name + "/check", {body: {}})); if (r.ok) toast(name + "：" + r.message, "ok"); else if (r.verify_url) verifyModal(name, r.verify_url); else toast(name + "：" + r.message, "bad"); refresh(); }
     if (act === "quota") { await busy(b, () => api("/accounts/" + name + "/quota", {body: {}})); toast(name + " 额度已刷新", "ok"); refresh(); }
     if (act === "reset") { await busy(b, () => api("/accounts/" + name + "/reset", {body: {}})); toast(name + " 已清除冷却和错误标记", "ok"); refresh(); }
+    if (act === "models") { const r = await busy(b, () => api("/accounts/" + name + "/models", {body: {}})); OPEN.add("ag:" + name); toast(name + " 支持 " + r.models.length + " 个 Antigravity 模型", "ok"); refresh(); }
     if (act === "login") loginModal(name, false);
     if (act === "proxy") proxyModal(name);
     if (act === "delete") deleteModal(name);

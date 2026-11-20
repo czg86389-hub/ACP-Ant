@@ -591,6 +591,7 @@ def account_view(acc) -> dict:
         "quota_at": acc.quota_at or None,
         "last_check_at": acc.last_check_at or None, "last_check_ok": acc.last_check_ok, "last_check_msg": acc.last_check_msg,
         "verify_url": acc.verify_url, "login_active": acc.name in LOGINS,
+        "models": [{"id": m, "levels": list(core.POOL.model_levels.get(m) or [])} for m in acc.models],
     }
 
 
@@ -655,6 +656,8 @@ async def studio_view(accs: list[dict]) -> dict:
             continue
         same = [r for r in rows if str(r.get("email") or "").lower() == a["email"]]
         chosen, why = studio.match(rows, a["email"])
+        if why == "disabled" and len(same) == 1:    # switched off in the panel: still this account's session
+            chosen = same[0]["account_id"]
         if chosen:
             a["studio"] = next(r for r in rows if r["account_id"] == chosen)
             a["studio_link"] = "linked"
@@ -825,7 +828,43 @@ async def api_enabled(name: str, request: Request):
     acc.enabled = on
     if on:
         core.POOL.wake()     # requests queued for a free slot can use it right away
-    core.event("info", name, "已开启" if on else "已关闭（不再被调用）")
+    core.event("info", name, "Antigravity 已开启" if on else "Antigravity 已关闭（不再被调用）")
+    return {"ok": True, "enabled": on}
+
+
+@router.post("/panel/api/accounts/{name}/models")
+async def api_models(name: str, request: Request):
+    """Read the models this account offers (opens and closes one session; costs no quota)."""
+    require(request, True)
+    acc = get_account(name)
+    if name in LOGINS:
+        raise HTTPException(409, "这个账号正在登录，登录完成后再读取")
+    try:
+        models = await acc.acp.read_models()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, "读取模型列表失败：%s" % str(e)[:160])
+    finally:
+        if not acc.enabled and acc.acp.alive and not acc.acp.turns:
+            await acc.acp.stop()     # a switched-off account keeps no process running
+    core.event("info", name, "读到 %d 个 Antigravity 模型" % len(models))
+    return {"ok": True, "models": account_view(acc)["models"]}
+
+
+@router.post("/panel/api/studio/{email}/enabled")
+async def api_studio_enabled(email: str, request: Request):
+    """Switch one AI Studio session on or off, independently of the Antigravity account with the same e-mail."""
+    require(request, True)
+    studio = getattr(core, "STUDIO", None)
+    if studio is None or not studio.configured:
+        raise HTTPException(400, "这台网关没有接入 AI Studio")
+    on = bool((await body_of(request)).get("enabled"))
+    try:
+        await studio.set_enabled(email, on)
+    except KeyError:
+        raise HTTPException(404, "没有这个 AI Studio 会话：%s" % email)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, "AI Studio 开关没有改成功：%s" % type(e).__name__)
+    core.event("info", email, "AI Studio 已开启" if on else "AI Studio 已关闭（aistudio/ 模型不再用这个账号）")
     return {"ok": True, "enabled": on}
 
 
