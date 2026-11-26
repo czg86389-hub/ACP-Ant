@@ -162,6 +162,26 @@ with tempfile.TemporaryDirectory() as d:
        'deleting the AI Studio session of a linked account keeps its Antigravity login')
     ok(client.delete('/panel/api/studio/nobody@example.invalid', headers=hdr).status_code == 404, 'deleting an unknown session is a 404')
 
+    # ---- deleting an Antigravity account removes its whole folder, video mode's locked folders included
+    g8home = os.path.join(d, 'accounts', 'g8')
+    for sub, mode in (('media', 0o700), ('media/empty', 0o500), ('media/w', 0o300)):
+        os.makedirs(os.path.join(g8home, sub), exist_ok=True)
+    os.chmod(os.path.join(g8home, 'media', 'empty'), 0o500)
+    os.chmod(os.path.join(g8home, 'media', 'w'), 0o300)
+    r = client.delete('/panel/api/accounts/g8', headers=hdr)
+    ok(r.status_code == 200 and not os.path.lexists(g8home), 'deleting an account leaves no folder behind (write-only media/w included)')
+    ghost = os.path.join(d, 'accounts', 'ghost')
+    os.makedirs(os.path.join(ghost, 'media', 'w'))
+    os.chmod(os.path.join(ghost, 'media', 'w'), 0o300)
+    r = client.post('/panel/api/accounts', json={'name': 'ghost', 'proxy': ''}, headers=hdr)
+    ok(r.status_code == 200 and os.path.isdir(ghost), 'an empty folder left by an older delete no longer blocks adding that name')
+    keep = os.path.join(d, 'accounts', 'keepme')
+    os.makedirs(os.path.join(keep, 'media', 'w'))
+    open(os.path.join(keep, 'media', 'note.txt'), 'w').write('x')
+    r = client.post('/panel/api/accounts', json={'name': 'keepme', 'proxy': ''}, headers=hdr)
+    ok(r.status_code == 400 and os.path.exists(os.path.join(keep, 'media', 'note.txt')), 'a folder that still holds files is never removed by "add"')
+    ok(client.post('/panel/api/accounts', json={'name': 'g9', 'proxy': ''}, headers=hdr).status_code == 400, 'an existing account is still "already exists"')
+
 # ---- panel rendering and search (node)
 html = (root / 'panel.html').read_text(encoding='utf-8')
 script = re.search(r'<script>(.*)</script>', html, re.S).group(1)

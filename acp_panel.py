@@ -795,7 +795,7 @@ async def api_create(request: Request):
     body = await body_of(request)
     name = str(body.get("name") or "").strip()
     home = home_of(name)
-    if os.path.exists(home):
+    if os.path.exists(home) and not (name not in core.POOL.accounts and is_leftover(home) and remove_tree(home)):
         raise HTTPException(400, "账号 %s 已经存在" % name)
     proxy = str(body.get("proxy") or "").strip()
     same: list[str] = []
@@ -1090,9 +1090,47 @@ async def api_delete(name: str, request: Request):
     px = core.read_proxy(home)
     if px:   # the history keeps proxies of deleted accounts too
         remember_proxy(name, px["HTTPS_PROXY"], read_text(os.path.join(home, "egress_ip.txt")), read_text(os.path.join(home, "egress_country.txt")))
-    shutil.rmtree(home, ignore_errors=True)
+    if not remove_tree(home):
+        core.event("warn", name, "删除账号时目录没删干净")
+        raise HTTPException(500, "账号 %s 的目录没有删干净（%s），请在服务器上检查权限" % (name, home))
     core.event("info", name, "已删除账号（含登录凭据）")
     return {"ok": True}
+
+
+def remove_tree(path: str) -> bool:
+    """Delete a folder completely. Video mode keeps write-only folders in every account (media/w is mode 0300, so
+    it cannot be listed); unlock every folder first, then delete. True when nothing is left."""
+    def unlock(p: str) -> None:
+        try:
+            os.chmod(p, 0o700)
+        except OSError:
+            pass
+        try:
+            entries = list(os.scandir(p))
+        except OSError:
+            return
+        for e in entries:
+            if e.is_dir(follow_symlinks=False):
+                unlock(e.path)
+    if os.path.isdir(path) and not os.path.islink(path):
+        unlock(path)
+        shutil.rmtree(path, ignore_errors=True)
+    return not os.path.lexists(path)
+
+
+def is_leftover(home: str) -> bool:
+    """A folder an older delete left behind: no login, no proxy setting, no files at all (only empty folders)."""
+    if os.path.exists(os.path.join(home, "proxy.env")) or os.path.isdir(os.path.join(home, ".gemini")):
+        return False
+    try:     # os.walk would skip folders it cannot read (media/w): unlock each one before it is entered
+        for root, dirs, files in os.walk(home):
+            if files:
+                return False
+            for d in dirs:
+                os.chmod(os.path.join(root, d), 0o700)
+    except OSError:
+        return False
+    return True
 
 
 @router.get("/panel/api/connect")
