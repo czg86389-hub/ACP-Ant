@@ -371,12 +371,25 @@ function studioModal(email) {
   };
 }
 function studioBtn(email, label) { return ' <button class="small" onclick="studioModal(\'' + esc(email || "") + '\')">' + label + "</button>"; }
+function studioDelBtn(s) {
+  return s ? ' <button class="small danger" data-act="studio-delete" data-email="' + esc(s.email || s.account_id) + '">删除</button>' : "";
+}
+function studioDeleteModal(email) {
+  openModal('<h3>删除 AI Studio 会话 ' + esc(email) + '</h3><p>会删除服务器上这个账号的 AI Studio 登录状态，<b>不能恢复</b>，以后要用得重新登录。同一邮箱的 Antigravity 登录不受影响。只是暂时不想用的话，关掉 AI Studio 一栏的开关就行。</p>' +
+    '<div class="field"><label>确认删除请输入邮箱 <b>' + esc(email) + '</b></label><input id="sdIn" autocomplete="off"></div>' +
+    '<div class="foot"><button onclick="closeModal()">取消</button><button class="primary" id="sdGo" style="background:var(--bad);border-color:var(--bad)">删除</button></div>');
+  $("#sdGo").onclick = async e => {
+    if ($("#sdIn").value.trim().toLowerCase() !== email.toLowerCase()) return toast("邮箱不对", "bad");
+    try { await busy(e.target, () => api("/studio/" + encodeURIComponent(email), {method: "DELETE"})); toast(email + " 的 AI Studio 会话已删除", "ok"); closeModal(); refresh(); }
+    catch (err) { toast(err.message, "bad"); }
+  };
+}
 function studioSwitch(s) {
   return s ? '<span class="sp"></span>' + switchHtml("studio-toggle", 'data-email="' + esc(s.email || s.account_id) + '"', !s.disabled, "AI Studio") : "";
 }
 function studioHtml(a) {
   const head = '<div class="row small src' + (a.studio && a.studio.disabled ? " off" : "") + '"><b>AI Studio</b> <span class="mute">第二路 · AIStudio2API</span>' +
-    (DATA.studio && DATA.studio.configured && a.email ? studioBtn(a.email, a.studio ? "重新登录" : "接入") : "") + studioSwitch(a.studio) + "</div>";
+    (DATA.studio && DATA.studio.configured && a.email ? studioBtn(a.email, a.studio ? "重新登录" : "接入") : "") + studioDelBtn(a.studio) + studioSwitch(a.studio) + "</div>";
   if (!DATA.studio || !DATA.studio.configured) return head + '<div class="row mute small">这台网关还没有接入 AI Studio 通道' + (DATA.studio && DATA.studio.error ? "：" + esc(DATA.studio.error) : "") + "。</div>";
   if (DATA.studio.error) return head + '<div class="row err small">' + esc(DATA.studio.error) + "</div>";
   if (a.studio) return head + studioBody(a.studio);
@@ -387,7 +400,7 @@ function studioHtml(a) {
 function studioOnlyHtml(s) {
   return '<div class="card acc' + (s.disabled ? " off" : "") + '"><div class="top"><h3>' + esc(s.email || s.label || s.account_id) + '</h3><span class="pill"><span class="dot"></span>仅 AI Studio</span></div>' +
     '<div class="row small src"><b>Antigravity</b> <span class="mute">原有一路</span></div><div class="row mute small">未关联：这个邮箱没有 Antigravity 登录，只能调用 aistudio/ 模型。 <button class="small" onclick="addModal(\'' + esc(s.email || "") + '\')">添加 Antigravity 登录</button></div>' +
-    '<div class="row small src' + (s.disabled ? " off" : "") + '"><b>AI Studio</b> <span class="mute">第二路 · AIStudio2API</span>' + studioBtn(s.email, "重新登录") + studioSwitch(s) + "</div>" + studioBody(s) + "</div>";
+    '<div class="row small src' + (s.disabled ? " off" : "") + '"><b>AI Studio</b> <span class="mute">第二路 · AIStudio2API</span>' + studioBtn(s.email, "重新登录") + studioDelBtn(s) + studioSwitch(s) + "</div>" + studioBody(s) + "</div>";
 }
 
 function switchHtml(act, attrs, on, what) {
@@ -467,6 +480,7 @@ document.addEventListener("click", async e => {
     if (act === "login") loginModal(name, false);
     if (act === "proxy") proxyModal(name);
     if (act === "delete") deleteModal(name);
+    if (act === "studio-delete") studioDeleteModal(b.dataset.email);
   } catch (err) { toast(err.message, "bad"); }
 });
 
@@ -506,9 +520,9 @@ function steps(i) { return '<div class="steps">' + ["1 账号信息", "2 登录 
 
 function addModal(prefill) {
   $("#modal").dataset.sticky = "1";
-  let mode = "oauth";
+  let mode = "token";
   openModal('<h3>添加新账号</h3>' +
-    '<div class="tabs"><button data-m="oauth" class="on">OAuth 授权</button><button data-m="token">Refresh Token</button></div>' +
+    '<div class="tabs"><button data-m="token" class="on">Refresh Token（不用打开登录页）</button><button data-m="oauth">OAuth 授权（打开 Google 登录页）</button></div>' +
     '<div class="field"><label>账号名字（可以直接用 Google 邮箱，也可以随便起，例如 g4）</label><input id="anName" value="' + esc(typeof prefill === "string" && prefill ? prefill : nextName()) + '"></div>' +
     '<div id="anTok" style="display:none"><div class="field"><label>Refresh Token</label><textarea id="rtVal" spellcheck="false" autocomplete="off" placeholder="在此处粘贴您的 Refresh Token\n\n支持格式：\n1. 单个 Token（1//...）\n2. JSON（含 refresh_token 字段，如导出的 {email, refresh_token}）\n3. 任意包含 Token 的文本（自动提取）"></textarea></div>' +
     '<p class="small mute">只能用 Antigravity 登录得到的 refresh_token；Gemini CLI 等其它程序的不能用。写进这个账号的登录文件（权限 600），不记日志。</p></div>' +
@@ -522,7 +536,7 @@ function addModal(prefill) {
     document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x.dataset.m === m));
     $("#anNext").textContent = m === "token" ? "确认添加" : "继续授权"; };
   document.querySelectorAll(".tabs button").forEach(x => x.onclick = () => setMode(x.dataset.m));
-  setMode("oauth");
+  setMode("token");
   const auto = $("#anName").value;
   $("#rtVal").oninput = () => { const m = $("#rtVal").value.match(/"email"\s*:\s*"([^"\s]+@[^"\s]+)"/); if (m && $("#anName").value === auto) $("#anName").value = m[1]; };
   $("#anNext").onclick = async e => {
@@ -549,11 +563,11 @@ window.cancelAdd = () => { delete $("#modal").dataset.sticky; closeModal(); };
 function loginModal(name, wizard) {
   $("#modal").dataset.sticky = "1";
   openModal('<h3>' + (wizard ? "添加账号 " : "重新登录 ") + esc(name) + '</h3>' +
-    '<div class="tabs"><button data-m="oauth" class="on">OAuth 授权</button><button data-m="token">Refresh Token</button></div>' +
-    '<div id="lgOauth"><ol class="small"><li>点「开始登录」，再点出现的按钮在浏览器里打开 Google 页面，选这个账号要用的 Google 账号，同意授权。</li>' +
+    '<div class="tabs"><button data-m="token" class="on">Refresh Token（不用打开登录页）</button><button data-m="oauth">OAuth 授权（打开 Google 登录页）</button></div>' +
+    '<div id="lgOauth" style="display:none"><ol class="small"><li>点「开始登录」，再点出现的按钮在浏览器里打开 Google 页面，选这个账号要用的 Google 账号，同意授权。</li>' +
     '<li>授权后浏览器会跳到一个<b>打不开的网址</b>（以 localhost 开头），或者页面上显示一串<b>授权码</b>。</li><li>把地址栏里的<b>整串网址</b>（或授权码）粘贴到下面的框里，点「完成登录」。</li></ol>' +
     '<div id="lgArea"><button class="primary" id="lgStart">开始登录</button></div><p id="lgRes" class="small"></p></div>' +
-    '<div id="lgTok" style="display:none"><div class="field"><label>Refresh Token</label><textarea id="rtVal" spellcheck="false" autocomplete="off" placeholder="在此处粘贴您的 Refresh Token（单个 1//... 或含 refresh_token 的 JSON）"></textarea></div>' +
+    '<div id="lgTok"><div class="field"><label>Refresh Token</label><textarea id="rtVal" spellcheck="false" autocomplete="off" placeholder="在此处粘贴您的 Refresh Token（单个 1//... 或含 refresh_token 的 JSON）"></textarea></div>' +
     '<p class="small mute">只能用 Antigravity 登录得到的 refresh_token。不能用时原来的登录不变。</p><p><button class="primary" id="rtGo">确认登录</button></p><p id="rtRes" class="small"></p></div>' +
     '<div class="foot"><button id="lgCancel">' + (wizard ? "以后再登录" : "取消") + "</button></div>");
   document.querySelectorAll(".tabs button").forEach(x => x.onclick = () => {

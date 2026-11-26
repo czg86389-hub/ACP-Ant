@@ -48,6 +48,11 @@ def handler(request):
             if a['id'] == acc:
                 a['enabled'] = body['enabled']
         return httpx.Response(200, json={'account': {}})
+    if method == 'DELETE' and path.startswith('/api/accounts/'):
+        acc = path.split('/')[3].replace('%40', '@')
+        S.setdefault('deleted', []).append(acc)
+        S['accounts'] = [a for a in S['accounts'] if a['id'] != acc]
+        return httpx.Response(204)
     if path == '/v1/chat/completions':
         S['gen'].append(request.headers.get('x-aistudio-account', ''))
         return httpx.Response(200, json={'choices': [{'message': {'content': 'hi'}}]})
@@ -142,13 +147,28 @@ with tempfile.TemporaryDirectory() as d:
     ok(client.post('/panel/api/studio/solo@example.invalid/enabled', json={'enabled': False}).status_code == 403,
        'the AI Studio switch needs the panel header')
 
+    # ---- deleting an AI Studio session (also when the e-mail has no Antigravity login)
+    ok(client.delete('/panel/api/studio/solo@example.invalid').status_code == 403, 'deleting needs the panel header')
+    view = client.get('/panel/api/overview').json()
+    ok([u['email'] for u in view['studio']['unlinked']] == ['solo@example.invalid'], 'an AI-Studio-only session is listed before deleting')
+    r = client.delete('/panel/api/studio/solo@example.invalid', headers=hdr)
+    view = client.get('/panel/api/overview').json()
+    ok(r.status_code == 200 and S.get('deleted') == ['solo@example.invalid'] and view['studio']['unlinked'] == [],
+       'an AI-Studio-only session can be deleted from the panel')
+    r = client.delete('/panel/api/studio/main@example.invalid', headers=hdr)
+    view = client.get('/panel/api/overview').json()
+    by = {a['name']: a for a in view['accounts']}
+    ok(r.status_code == 200 and 'g9' in by and by['g9']['studio'] is None and os.path.isdir(os.path.join(d, 'accounts', 'g9')),
+       'deleting the AI Studio session of a linked account keeps its Antigravity login')
+    ok(client.delete('/panel/api/studio/nobody@example.invalid', headers=hdr).status_code == 404, 'deleting an unknown session is a 404')
+
 # ---- panel rendering and search (node)
 html = (root / 'panel.html').read_text(encoding='utf-8')
 script = re.search(r'<script>(.*)</script>', html, re.S).group(1)
 code = r"""
 const vm=require('vm'),assert=require('assert'),fs=require('fs');const s=fs.readFileSync(process.argv[1],'utf8');
 const names=['ago','until','num','kindText','quotaHtml','when','studioState','studioQuota','studioBody','studioBtn','switchHtml','studioSwitch',
- 'agModelsHtml','studioHtml','studioOnlyHtml','cardHtml','hayOf','studioHay','matches','studioReady'];
+ 'agModelsHtml','studioDelBtn','studioHtml','studioOnlyHtml','cardHtml','hayOf','studioHay','matches','studioReady'];
 const src=names.map(n=>{const i=s.indexOf('function '+n+'(');assert(i>=0,n);let d=0,j=s.indexOf('{',i);for(let k=j;k<s.length;k++){if(s[k]==='{')d++;if(s[k]==='}'&&--d===0)return s.slice(i,k+1);}}).join('\n');
 const consts=s.match(/const (GROUP|WIN|KIND) = [^\n]*;/g).join('\n');
 const c={esc:x=>String(x??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])),copy(){},Date,Math,String,Number,isNaN,
@@ -166,6 +186,8 @@ assert(/class="card acc s-off off"/.test(h)&&!/data-act="toggle" data-name="g9" 
 h=c.cardHtml({...base,enabled:false,status:'off',status_text:'已关闭'});
 assert(!/class="card acc s-off off"/.test(h)&&/data-act="studio-toggle"[^>]*checked/.test(h),'Antigravity off, AI Studio on: card stays bright');
 h=c.cardHtml({...base,models:[]});assert(h.includes('读取模型列表')&&h.includes('data-act="models"'),'no models yet: read button');
+assert(c.cardHtml(base).includes('data-act="studio-delete" data-email="main@example.invalid"')&&!c.cardHtml({...base,studio:null,studio_link:'none'}).includes('studio-delete'),'linked AI Studio section has a delete button');
+h=c.studioOnlyHtml({...base.studio,disabled:true});assert(h.includes('data-act="studio-delete"'),'AI-Studio-only card has a delete button');
 h=c.studioOnlyHtml({...base.studio,disabled:true});assert(h.includes('data-act="studio-toggle"')&&!/studio-toggle"[^>]*checked/.test(h)&&h.includes('card acc off'),'AI-Studio-only card has its switch');
 c.QUERY='main';assert(c.matches(c.hayOf(base))&&!c.matches(c.hayOf({...base,name:'g8',email:'x@y',studio:null,egress_ip:'',proxy:''})),'search by e-mail');
 c.QUERY='1.2.3.4';assert(c.matches(c.hayOf(base)),'search by exit IP');
@@ -181,5 +203,7 @@ with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-
     f.write(script)
 r = subprocess.run(['node', '-e', code, f.name], capture_output=True, text=True, encoding='utf-8')
 os.unlink(f.name)
+ok('let mode = "token";' in html and 'setMode("token");' in html and html.count('<button data-m="token" class="on">Refresh Token') == 2
+   and '<div id="lgOauth" style="display:none">' in html, 'both login dialogs open on Refresh Token (no Google page needed)')
 ok(r.returncode == 0 and 'PANEL_CONTROLS_PASS' in r.stdout, 'panel renders two switches, model lists and search' + ((' :: ' + r.stderr[-600:]) if r.returncode else ''))
 print('%d/%d passed' % (checks, checks))

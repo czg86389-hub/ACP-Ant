@@ -137,6 +137,7 @@ cat data/panel-initial-password.txt     # 面板初始密码（可能要 sudo）
   面板密码和客户端用的 API 密钥是两回事。
 - **账号卡片**：状态（正常 / 已关闭 / 需要 Google 验证 / 冷却中 / 需要重新登录）、代理和出口 IP、
   **额度**（Gemini 模型、Claude / GPT 模型、Gemini 4 Argon 三组，每组的每周和 5 小时剩余百分比和重置时间）、今天和近 7 天的成功 / 失败次数和 Token 用量、最近错误。
+- **删除 AI Studio 会话**：AI Studio 一栏的「删除」按钮（同一邮箱的 Antigravity 登录不受影响）。
 - **搜索**：账号多的时候在列表上方搜索名称、邮箱、代理、出口 IP 或状态（按 `/` 快速搜索，`Esc` 清空）。
 - **开关**：每个账号的 Antigravity 和 AI Studio 各一个开关，分开控制。关掉 Antigravity 后这个账号不会再被调用（文件 `accounts/<名字>/disabled`）；关掉 AI Studio 后 `aistudio/` 模型不再用这个账号（代理和登录保持不变）。打开立即恢复。
 - **模型列表**：每个账号显示它支持的 Antigravity 模型和思考档位，AI Studio 一栏显示它的模型；点一下复制。没读到时点「读取模型列表」（开空会话读取，不消耗额度）。

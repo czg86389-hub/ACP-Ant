@@ -245,7 +245,7 @@ html = (root / 'panel.html').read_text(encoding='utf-8')
 script = re.search(r'<script>(.*)</script>', html, re.S).group(1)
 code = r"""
 const vm=require('vm'),assert=require('assert'),fs=require('fs');const s=fs.readFileSync(process.argv[1],'utf8');
-const names=['when','studioState','studioQuota','studioBody','studioBtn','switchHtml','studioSwitch','studioHtml','studioOnlyHtml'];
+const names=['when','studioState','studioQuota','studioBody','studioBtn','switchHtml','studioSwitch','studioDelBtn','studioHtml','studioOnlyHtml'];
 const src=names.map(n=>{const i=s.indexOf('function '+n+'(');assert(i>=0,n);let d=0,j=s.indexOf('{',i);for(let k=j;k<s.length;k++){if(s[k]==='{')d++;if(s[k]==='}'&&--d===0)return s.slice(i,k+1);}}).join('\n');
 const c={esc:String,num:String,ago:t=>'T'+t,copy(){},DATA:{studio:{configured:true,error:''}}};vm.createContext(c);vm.runInContext(src,c);
 const row={account_id:'a@b',email:'a@b',ready:true,state:'ready',exit:'1.2.3.4',models:['m'],quota:{plan:'Free',used_today:{requests:2},limits:[],service_state:'RUNNING'}};

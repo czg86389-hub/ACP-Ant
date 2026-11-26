@@ -868,6 +868,23 @@ async def api_studio_enabled(email: str, request: Request):
     return {"ok": True, "enabled": on}
 
 
+@router.delete("/panel/api/studio/{email}")
+async def api_studio_delete(email: str, request: Request):
+    """Delete one AI Studio session and its saved sign-in; the Antigravity login with the same e-mail stays."""
+    require(request, True)
+    studio = getattr(core, "STUDIO", None)
+    if studio is None or not studio.configured:
+        raise HTTPException(400, "这台网关没有接入 AI Studio")
+    try:
+        await studio.delete(email)
+    except KeyError:
+        raise HTTPException(404, "没有这个 AI Studio 会话：%s" % email)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, "AI Studio 会话没有删除成功：%s" % type(e).__name__)
+    core.event("info", email, "已删除 AI Studio 会话（含登录状态）")
+    return {"ok": True}
+
+
 @router.post("/panel/api/accounts/{name}/quota")
 async def api_quota(name: str, request: Request):
     require(request, True)

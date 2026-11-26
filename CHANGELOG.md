@@ -3,6 +3,11 @@
 网页控制面板会定期读取这个文件（只读取，不上传任何数据）：这里出现比你正在运行的版本更新的版本号时，面板顶部会提示，
 用 `git clone` + `./install.sh` 装的可以在面板里一键更新。格式：`## 版本号 — 日期`，下面每行一条 `- 改动`。
 
+## 1.5.7 — 2026-11-26
+- 新：可以删除 AI Studio 会话。每个 AI Studio 一栏（包括「仅 AI Studio」、没有 Antigravity 登录的卡片）都有「删除」按钮，输入邮箱确认后删除服务器上保存的这个账号的 AI Studio 登录状态；同一邮箱的 Antigravity 登录不受影响。
+- 改：「添加新账号」和「重新登录」默认打开 Refresh Token 页（不用打开 Google 登录页、不用输账号密码，粘贴 refresh_token 即可）；要用浏览器登录时点「OAuth 授权」。
+- 新增离线测试项（panel_controls_test 19 项）。
+
 ## 1.5.6 — 2026-11-21
 - 修：Antigravity 通道在长上下文多轮工具调用（如 `gemini-4-neon` 搭配 Agent 客户端）下响应极慢甚至超时（动辄 85–210 秒）。原因是 ACP 协议没有 `stop_sequences`，模型在写出完整的 `</tool_calls>` 后仍继续凭空续写多轮假 `<tool_result>` 与后续对话，而网关此前一直等到整段无效续写自然结束才返回。现在启用工具调用的请求一旦收到完整且合法的 `</tool_calls>`（或 `</function_calls>`），立即截断其后内容并向 `agy` 发送 `session/cancel` 结束本轮（支持 Chat Completions、Messages、Responses 三种接口的流式与非流式）；同时逐个校验闭合标签，避免参数字符串内恰好包含 `</tool_calls>` 时误截断，既将工具调用耗时从分钟级压回秒级，也避免浪费 Antigravity 额度。
 - 修：上游返回临时容量不足（`MODEL_CAPACITY_EXHAUSTED`、`selected model is at capacity`、`no available model instances`）时优先判为 `RATE_LIMIT`（90 秒短冷却），不再被误判为个人额度耗尽（`QUOTA`，30 分钟冷却）；真正的个人额度耗尽仍按 `QUOTA` 处理。

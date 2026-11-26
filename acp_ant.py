@@ -63,7 +63,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from studio_provider import PREFIX as STUDIO_PREFIX, STUDIO, is_studio_model
 
-__version__ = "1.5.6"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
+__version__ = "1.5.7"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
 
 log = logging.getLogger("acp-ant")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")

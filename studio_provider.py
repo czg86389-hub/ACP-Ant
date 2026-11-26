@@ -473,6 +473,25 @@ class StudioProvider:
         self._accounts_at = 0.0
         return bool(enabled)
 
+    async def delete(self, email):
+        """Remove one AIStudio2API account together with its saved sign-in (the Antigravity login with the same
+        e-mail is not touched). Shares the repair lock so a page restart cannot run on an account being removed."""
+        email = (email or '').strip().lower()
+        async with self._heal_lock:
+            client = await self._admin(30)
+            try:
+                accounts = (await client.get('/api/accounts')).json().get('accounts') or []
+                a = next((x for x in accounts if str(x.get('id') or '').lower() == email), None)
+                if a is None:
+                    raise KeyError(email)
+                r = await client.delete('/api/accounts/' + quote(a['id'], safe=''))
+                r.raise_for_status()
+            finally:
+                await client.aclose()
+        self.heals.pop(email, None)
+        self._accounts_at = 0.0
+        return True
+
     def start_background(self):
         """Keep the account list / service auto-start running even when nobody has the panel open."""
         async def loop():
