@@ -3,6 +3,12 @@
 网页控制面板会定期读取这个文件（只读取，不上传任何数据）：这里出现比你正在运行的版本更新的版本号时，面板顶部会提示，
 用 `git clone` + `./install.sh` 装的可以在面板里一键更新。格式：`## 版本号 — 日期`，下面每行一条 `- 改动`。
 
+## 1.5.9 — 2026-11-27
+- 改：启用 AI Studio 第二路后，共用模型（默认 `gemini-3.8-flash`、`gemini-4-hydrogen`、`gemini-4-neon`、`gemini-4-carbon`）默认优先使用所有就绪账号的 AI Studio 每日额度（`AGY_STUDIO_FIRST=1`），AI Studio 全部冷却、达到限额或无 Ultra 档位（如 `gemini-4-carbon`）时自动无感改用 Antigravity；需要显式先走 Antigravity 可传 `antigravity/<模型名>` 或设 `AGY_STUDIO_FIRST=0`。同时统一 `Gemini 4 Hydrogen`、`Gemini 4 Neon`、`Gemini 4 Carbon` 在两路的全部名称写法（`aistudio/gemini-4-*`、`aistudio/gemini-4-*-high/medium`、`gemini-4-*-high/medium`、`Gemini 4 Neon (High)`、`Gemini 4 Carbon (High)`、`models/gemini-4-*` 等均归一为同一模型并保留思考档位）。
+- 修：`aistudio.sh` 生成的 AIStudio2API 配置原来写死 `WARM_WORKER_LIMIT=2`（以及小于默认启动并发的 `MAX_ACTIVE_WORKERS=3`），导致即使有十几个就绪账号，请求也只在 2 个预热账号之间轮转、其余账号长期 0 次调用。现在改为 `WARM_WORKER_LIMIT=30`、`MAX_ACTIVE_WORKERS=30`、`ROUTING_STRATEGY=round-robin`，所有开启的 AI Studio 账号均匀轮询。
+- 修：Antigravity 返回 `⚠ Individual quota reached... Resets in ...` 与 `⚠ Authentication expired. Please log back in.` 状态行时，原来未命中 `API error` 正则而落入 `SERVER`（0 秒冷却、不摘除），导致已限额或掉登的账号每轮继续被选中并反复报错。现在精确解析 `Resets in` 倒计时按真实重置时间冷却（`QUOTA`），登录过期自动标为需要重新登录（`AUTH`），`Unknown model ID` 自动移出该账号的缓存模型列表并换号重试。
+- 修：`generate()` 重试换号时每个账号拥有完整的单次超时窗口，避免前序排队或换号耗时挤占后一个账号导致提前超时；`_run_session()` 统一收口未完成/已抛错的子任务引用，彻底消除 `Task exception was never retrieved` 与 `Task was destroyed but it is pending` 错误日志；静音 `httpx` 本地轮询日志噪音。
+
 ## 1.5.8 — 2026-11-26
 - 修：在面板删除账号后，用同一个名字再添加时提示「账号已经存在」，但列表里看不到这个账号。原因是视频模式在每个账号目录里放了一个只能写不能读的文件夹（media/w），删除时删不掉，留下一个空目录。现在删除前先解锁再删，删不干净会直接报错，不再显示「已删除」；以前删除留下的空目录，添加同名账号时自动清掉（目录里还有文件的不会动）。
 - 新增离线测试项（panel_controls_test 23 项）。

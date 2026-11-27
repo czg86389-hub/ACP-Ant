@@ -348,7 +348,7 @@ async def restart_acp(acc) -> None:
         asyncio.create_task(acc.acp.prewarm())
 
 
-AUTH_WORDS = re.compile(r"sign in|not logged in|unauthenticated|authentication required|invalid_grant|needs a new login", re.I)
+AUTH_WORDS = re.compile(r"sign in|log back in|not logged in|unauthenticated|authentication (?:required|expired)|invalid_grant|needs a new login", re.I)
 
 
 async def check_account(acc) -> dict:
@@ -370,6 +370,17 @@ async def check_account(acc) -> dict:
     if soft is not None and soft.kind == "LICENSE":
         acc.disabled_reason = "no valid Antigravity licence (#3501)"
         res = {"ok": False, "message": "这个号没有 Antigravity 使用许可（#3501）：重新登录试试，不行就换号"}
+    elif soft is not None and soft.kind == "AUTH":
+        acc.disabled_reason = "需要重新登录"
+        res = {"ok": False, "message": "登录已失效，需要重新登录"}
+    elif soft is not None and soft.kind in ("QUOTA", "RATE_LIMIT", "UPSTREAM_LIMIT"):
+        if soft.kind == "QUOTA":
+            acc.cooldown_kind = "QUOTA"
+            acc.cooldown_until = max(acc.cooldown_until, time.time() + (soft.retry_after if soft.retry_after > 0 else core.COOLDOWN_QUOTA))
+        elif soft.kind == "RATE_LIMIT":
+            acc.cooldown_kind = "RATE_LIMIT"
+            acc.cooldown_until = max(acc.cooldown_until, time.time() + core.COOLDOWN_RATE)
+        res = {"ok": False, "message": "额度用完或被限流（稍后会自动恢复）：" + ANSI.sub("", answer).strip()[:160]}
     elif soft is not None and soft.kind != "VERIFY":
         res = {"ok": False, "message": "出错了：" + ANSI.sub("", answer)[:240]}
     elif re.search(r'"status"\s*:\s*"SUCCESS"', out) and soft is None:
@@ -846,6 +857,9 @@ async def api_models(name: str, request: Request):
     finally:
         if not acc.enabled and acc.acp.alive and not acc.acp.turns:
             await acc.acp.stop()     # a switched-off account keeps no process running
+    if models and acc.disabled_reason and (AUTH_WORDS.search(acc.disabled_reason) or "登录" in acc.disabled_reason):
+        acc.disabled_reason = ""
+        core.POOL.wake()
     core.event("info", name, "读到 %d 个 Antigravity 模型" % len(models))
     return {"ok": True, "models": account_view(acc)["models"]}
 

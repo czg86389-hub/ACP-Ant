@@ -52,7 +52,7 @@ case "${1:-}" in
     mkdir -p "$DATA"; chmod 700 "$ROOT/aistudio" "$DATA"
     if [ ! -f "$DATA/.env" ]; then
       ( umask 077
-        printf 'LISTEN_ADDR=0.0.0.0:2048\nPREVIEW_LISTEN_ADDR=127.0.0.1:2050\nPROXY_API_KEY=sk-acp-studio-%s\nADMIN_AUTH_ENABLED=true\nADMIN_PASSWORD=%s\nAUTO_START=true\nREQUEST_BODY_LOG=false\nLOG_FILE=false\nWAA_BACKEND=spidermonkey\nWARM_WORKER_LIMIT=2\nMAX_ACTIVE_WORKERS=3\nINIT_TIMEOUT=2m\nREQUEST_TIMEOUT=3m\nNONSTREAM_KEEPALIVE=false\n' \
+        printf 'LISTEN_ADDR=0.0.0.0:2048\nPREVIEW_LISTEN_ADDR=127.0.0.1:2050\nPROXY_API_KEY=sk-acp-studio-%s\nADMIN_AUTH_ENABLED=true\nADMIN_PASSWORD=%s\nAUTO_START=true\nREQUEST_BODY_LOG=false\nLOG_FILE=false\nWAA_BACKEND=spidermonkey\nROUTING_STRATEGY=round-robin\nWARM_WORKER_LIMIT=30\nMAX_ACTIVE_WORKERS=30\nWARM_STARTUP_CONCURRENCY=5\nINIT_TIMEOUT=2m\nREQUEST_TIMEOUT=5m\nNONSTREAM_KEEPALIVE=false\n' \
           "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > "$DATA/.env" )
       say "已生成 AIStudio2API 的密钥（只保存在 $DATA/.env，权限 600）"
     fi

@@ -128,8 +128,76 @@ with tempfile.TemporaryDirectory() as d:
                            headers={**key, **(headers or {})})
 
     ok(core.shared_base('aistudio/gemini-4-neon') == 'gemini-4-neon' and core.shared_base('gemini-3.8-flash-medium') == 'gemini-3.8-flash'
-       and core.shared_base('gemini-4-hydrogen') == 'gemini-4-hydrogen' and core.shared_base('other-model') == ''
-       and core.shared_base('aistudio/other-model') == '', 'the three models (with or without aistudio/ or a thought level) are shared, others not')
+       and core.shared_base('gemini-4-hydrogen') == 'gemini-4-hydrogen' and core.shared_base('antigravity/gemini-4-neon') == 'gemini-4-neon'
+       and core.shared_base('aistudio/gemini-4-hydrogen-medium') == 'gemini-4-hydrogen'
+       and core.shared_base('Gemini 4 Hydrogen (Medium)') == 'gemini-4-hydrogen'
+       and core.shared_base('aistudio/gemini-4-neon-xhigh') == 'gemini-4-neon'
+       and core.shared_base('Gemini 4 Neon (High)') == 'gemini-4-neon'
+       and core.shared_base('gemini_4_neon') == 'gemini-4-neon'
+       and core.shared_base('gemini-4-carbon') == 'gemini-4-carbon'
+       and core.shared_base('aistudio/gemini-4-carbon-high') == 'gemini-4-carbon'
+       and core.shared_base('Gemini 4 Carbon (High)') == 'gemini-4-carbon'
+       and core.shared_base('gemini_4_carbon') == 'gemini-4-carbon'
+       and core.shared_base('models/gemini-4-hydrogen') == 'gemini-4-hydrogen'
+       and core.shared_base('gemini_4_hydrogen') == 'gemini-4-hydrogen'
+       and core.shared_base('other-model') == '' and core.shared_base('aistudio/other-model') == '',
+       'shared models (with aistudio/, antigravity/, display names, or thought level) resolve cleanly; others do not')
+
+    # ---- unified Gemini 4 Hydrogen / Neon / Carbon names across AI Studio and Antigravity
+    reset()
+    r = chat('aistudio/gemini-4-hydrogen-medium')
+    ok(r.status_code == 200 and 'from-studio' in r.text and G['calls'] == [] and S['calls'][0]['model'] == 'gemini-4-hydrogen'
+       and S['calls'][0]['effort'] == 'medium', 'aistudio/gemini-4-hydrogen-medium strips -medium for AI Studio and keeps effort=medium')
+    reset(status={'gemini-4-hydrogen': 429})
+    r = chat('aistudio/gemini-4-hydrogen-medium')
+    ok(r.status_code == 200 and 'from-antigravity' in r.text and G['calls'] == ['gemini-4-hydrogen-medium'],
+       'aistudio/gemini-4-hydrogen-medium falls back to Antigravity gemini-4-hydrogen-medium on 429')
+    reset()
+    r = chat('Gemini 4 Hydrogen (Medium)')
+    ok(r.status_code == 200 and 'from-studio' in r.text and G['calls'] == [] and S['calls'][0]['model'] == 'gemini-4-hydrogen'
+       and S['calls'][0]['effort'] == 'medium', 'display name Gemini 4 Hydrogen (Medium) routes to AI Studio first as same model')
+    reset()
+    r = chat('aistudio/gemini-4-neon-high')
+    ok(r.status_code == 200 and 'from-studio' in r.text and G['calls'] == [] and S['calls'][0]['model'] == 'gemini-4-neon'
+       and S['calls'][0]['effort'] == 'high', 'aistudio/gemini-4-neon-high strips -high for AI Studio and keeps effort=high')
+    reset()
+    r = chat('Gemini 4 Neon (Medium)')
+    ok(r.status_code == 200 and 'from-studio' in r.text and G['calls'] == [] and S['calls'][0]['model'] == 'gemini-4-neon'
+       and S['calls'][0]['effort'] == 'medium', 'display name Gemini 4 Neon (Medium) routes to AI Studio first as same model')
+    reset(status={'gemini-4-carbon': 403})
+    r = chat('aistudio/gemini-4-carbon-high')
+    ok(r.status_code == 200 and 'from-antigravity' in r.text and S['calls'][0]['model'] == 'gemini-4-carbon'
+       and S['calls'][0]['effort'] == 'high' and G['calls'] == ['gemini-4-carbon-high'],
+       'aistudio/gemini-4-carbon-high normalizes for AI Studio and falls back to Antigravity gemini-4-carbon-high on 403')
+
+    # ---- default STUDIO_FIRST=True: plain X uses AI Studio first, falls back to Antigravity when AI Studio cannot serve
+    reset()
+    r = chat('gemini-4-neon')
+    ok(r.status_code == 200 and 'from-studio' in r.text and G['calls'] == [] and S['calls'][0]['model'] == 'gemini-4-neon'
+       and S['calls'][0]['effort'] == 'xhigh', 'STUDIO_FIRST default: plain shared model uses AI Studio first with default effort')
+    reset()
+    r = chat('gemini-4-hydrogen-medium')
+    ok(r.status_code == 200 and 'from-studio' in r.text and G['calls'] == [] and S['calls'][0]['model'] == 'gemini-4-hydrogen'
+       and S['calls'][0]['effort'] == 'medium', 'STUDIO_FIRST default: -medium suffix preserved on AI Studio')
+    reset(status={'gemini-4-neon': 429})
+    r = chat('gemini-4-neon')
+    ok(r.status_code == 200 and 'from-antigravity' in r.text and len(S['calls']) == 1 and G['calls'] == ['gemini-4-neon'],
+       'STUDIO_FIRST default: AI Studio 429 falls back to Antigravity without ping-pong')
+    reset()
+    r = chat('gemini-4-carbon-high')
+    ok(r.status_code == 200 and 'from-antigravity' in r.text and S['calls'] == [] and G['calls'] == ['gemini-4-carbon-high'],
+       'STUDIO_FIRST default: gemini-4-carbon skips non-Ultra AI Studio accounts without a wasted 403')
+    reset()
+    r = chat('Gemini 4 Carbon (High)')
+    ok(r.status_code == 200 and 'from-antigravity' in r.text and S['calls'] == [] and G['calls'] == ['Gemini 4 Carbon (High)'],
+       'STUDIO_FIRST default: display name Gemini 4 Carbon (High) resolves cleanly to gemini-4-carbon')
+    reset()
+    r = chat('antigravity/gemini-4-neon')
+    ok(r.status_code == 200 and 'from-antigravity' in r.text and S['calls'] == [],
+       'explicit antigravity/ prefix uses Antigravity first even when STUDIO_FIRST is on')
+
+    # ---- with STUDIO_FIRST=False: Antigravity first, AI Studio takeover on cooldown / error
+    core.STUDIO_FIRST = False
 
     # ---- aistudio/X: AI Studio first, Antigravity when AI Studio cannot serve
     reset()

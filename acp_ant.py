@@ -63,10 +63,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from studio_provider import PREFIX as STUDIO_PREFIX, STUDIO, is_studio_model
 
-__version__ = "1.5.8"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
+__version__ = "1.5.9"     # keep in step with the newest heading in CHANGELOG.md (the panel compares against it)
 
 log = logging.getLogger("acp-ant")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -98,12 +100,17 @@ REQUIRE_PROXY = _env_bool("AGY_REQUIRE_PROXY", False)   # since 1.4.0 a proxy is
 DEFAULT_MODEL = os.environ.get("AGY_DEFAULT_MODEL", "gemini-3.8-flash-medium")
 MODEL_FALLBACK = _env_bool("AGY_MODEL_FALLBACK", True)         # unknown model name -> DEFAULT_MODEL instead of an error
 # Models whose quota is shared between Antigravity ("gemini-4-neon") and AI Studio ("aistudio/gemini-4-neon"): when
-# the named source cannot serve (limit reached, cooling down, logged out, down), the same request goes to the other.
-SHARED_MODELS = frozenset(m.strip() for m in os.environ.get("AGY_SHARED_MODELS", "gemini-3.8-flash,gemini-4-hydrogen,gemini-4-neon").split(",") if m.strip())
+# the first source cannot serve (limit reached, cooling down, logged out, down), the same request goes to the other.
+SHARED_MODELS = frozenset(m.strip() for m in os.environ.get(
+    "AGY_SHARED_MODELS", "gemini-3.8-flash,gemini-4-hydrogen,gemini-4-neon,gemini-4-carbon").split(",") if m.strip())
+# When AI Studio is configured, use AI Studio's daily quota first for unprefixed shared models ("gemini-4-hydrogen"),
+# falling back to Antigravity when AI Studio cannot serve ("antigravity/<model>" or AGY_STUDIO_FIRST=0 picks Antigravity first).
+STUDIO_FIRST = _env_bool("AGY_STUDIO_FIRST", True)
+STUDIO_ULTRA_ONLY = frozenset(("gemini-4-carbon",))
 # Thought level used when a request names none ("model=level", comma separated; empty = each model's own default).
 # A level the model does not offer becomes the nearest lower one it has (xhigh -> high -> medium -> low).
 DEFAULT_LEVELS = dict(p.split("=", 1) for p in (x.strip() for x in os.environ.get(
-    "AGY_DEFAULT_LEVELS", "gemini-4-neon=xhigh,gemini-4-hydrogen=xhigh,gemini-3.8-flash=high").split(",")) if "=" in p)
+    "AGY_DEFAULT_LEVELS", "gemini-4-neon=xhigh,gemini-4-hydrogen=xhigh,gemini-4-carbon=high,gemini-3.8-flash=high").split(",")) if "=" in p)
 MAX_IMAGES = _env_int("AGY_MAX_IMAGES", 200)                   # images per request. Measured 2026-11-12: Gemini 3.8 Flash
 # agy cuts a prompt that is too long at the END (about 188 000 characters), which loses the newest input. Keep the
 # whole prompt under this many characters by leaving out the oldest history (0 = no limit).
@@ -148,6 +155,21 @@ AUDIO_FORMATS = {"wav": "audio/wav", "mp3": "audio/mpeg", "aac": "audio/aac", "o
 # Public model name -> (Antigravity model id, thought level or None to keep the account default).
 # Names not listed here are passed through; a trailing -high / -medium / -low selects the thought level.
 MODEL_ALIASES: dict[str, tuple[str, str | None]] = {
+    "gemini-4-hydrogen-xhigh": ("gemini-4-hydrogen", "xhigh"),
+    "gemini-4-hydrogen-high": ("gemini-4-hydrogen", "high"),
+    "gemini-4-hydrogen-medium": ("gemini-4-hydrogen", "medium"),
+    "gemini-4-hydrogen-low": ("gemini-4-hydrogen", "low"),
+    "gemini-4-hydrogen": ("gemini-4-hydrogen", None),
+    "gemini-4-neon-xhigh": ("gemini-4-neon", "xhigh"),
+    "gemini-4-neon-high": ("gemini-4-neon", "high"),
+    "gemini-4-neon-medium": ("gemini-4-neon", "medium"),
+    "gemini-4-neon-low": ("gemini-4-neon", "low"),
+    "gemini-4-neon": ("gemini-4-neon", None),
+    "gemini-4-carbon-xhigh": ("gemini-4-carbon", "xhigh"),
+    "gemini-4-carbon-high": ("gemini-4-carbon", "high"),
+    "gemini-4-carbon-medium": ("gemini-4-carbon", "medium"),
+    "gemini-4-carbon-low": ("gemini-4-carbon", "low"),
+    "gemini-4-carbon": ("gemini-4-carbon", None),
     "gemini-3.8-flash-high": ("gemini-3.8-flash", "high"),
     "gemini-3.8-flash-medium": ("gemini-3.8-flash", "medium"),
     "gemini-3.8-flash-low": ("gemini-3.8-flash", "low"),
@@ -162,20 +184,40 @@ except (ValueError, TypeError, IndexError, AttributeError):
     log.warning("AGY_MODEL_ALIASES is not valid JSON of the form {\"name\": [\"model\", \"level\"]}; ignored")
 
 LEVELS = ("low", "medium", "high", "xhigh")
+_GEMINI4_NAME = re.compile(r"^gemini[\s_-]*4(?:\.0)?[\s_-]*(hydrogen|neon|carbon|argon)(?:[\s_-]+(xhigh|high|medium|low))?$", re.I)
+
+
+def _canonical_model_name(name: str) -> str:
+    """Normalize provider prefixes ('aistudio/', 'antigravity/', 'models/') and display variants
+    ('Gemini 4 Hydrogen (Medium)', 'Gemini 4 Neon (High)', 'Gemini 4 Carbon', 'gemini_4_neon') to canonical slug."""
+    s = (name or DEFAULT_MODEL).strip()
+    s = re.sub(r"\[[^\]]*\]$", "", s)
+    for pfx in (STUDIO_PREFIX, ANTIGRAVITY_PREFIX, "models/"):
+        if s.lower().startswith(pfx):
+            s = s[len(pfx):].strip()
+            break
+    else:
+        if "/" in s:
+            s = s.split("/")[-1].strip()
+    s = re.sub(r"\s*[（(]\s*(xhigh|high|medium|low)\s*[)）]\s*$", r"-\1", s, flags=re.I)
+    mg = _GEMINI4_NAME.match(s)
+    if mg:
+        base = "gemini-4-" + mg.group(1).lower()
+        return (base + "-" + mg.group(2).lower()) if mg.group(2) else base
+    return s
 
 
 def resolve_model(name: str) -> tuple[str, str | None]:
     """Client model name -> (Antigravity model id, thought level). Accepts aliases, provider prefixes
-    ("antigravity/gemini-3.8-flash"), Claude Code style suffixes ("[1m]", "-20261001") and -low/-medium/-high."""
-    name = (name or DEFAULT_MODEL).strip()
-    name = re.sub(r"\[[^\]]*\]$", "", name).split("/")[-1]
+    ("aistudio/gemini-4-hydrogen-medium", "antigravity/gemini-4-hydrogen"), display names, and -low/-medium/-high."""
+    name = _canonical_model_name(name)
     for cand in (name, re.sub(r"-(\d{8}|latest)$", "", name)):
         if cand in MODEL_ALIASES:
             return MODEL_ALIASES[cand]
     base = re.sub(r"-(\d{8}|latest)$", "", name)
-    m = re.match(r"^(.+)-(xhigh|high|medium|low)$", base)
+    m = re.match(r"^(.+)-(xhigh|high|medium|low)$", base, re.I)
     if m:
-        return m.group(1), m.group(2)
+        return m.group(1), m.group(2).lower()
     return base, None
 
 
@@ -227,6 +269,18 @@ _APIERR_TEXT = re.compile(r"^\s*⚠\s*(?:API error \(attempt \d+\):\s*([^\n]+)\n
 # An account without an Antigravity licence gets this instead of an answer (seen 2026-11-12 on a newly added account):
 #   "⚠ You do not have a valid license of this product. Please contact your administrator ... (#3501)"
 _LICENSE_TEXT = re.compile(r"do not have a valid license|\(#3501\)", re.I)
+_DISABLED_SERVICE_TEXT = re.compile(r"service has been disabled in this account|violation of terms of service|account has been (?:disabled|suspended)", re.I)
+_INDIVIDUAL_QUOTA_TEXT = re.compile(r"individual quota reached|upgrade your subscription to increase your limits", re.I)
+_RESET_IN = re.compile(r"resets?\s+in\s+(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?", re.I)
+
+
+def _parse_reset_seconds(text: str) -> float:
+    m = _RESET_IN.search(text)
+    if not m or not any(m.groups()):
+        return 0.0
+    d, h, mi, s = (int(x or 0) for x in m.groups())
+    total = d * 86400 + h * 3600 + mi * 60 + s
+    return float(total + 5) if total > 0 else 0.0
 
 
 # Every canned reply above starts with one of these. As soon as the answer clearly starts with something else it is
@@ -247,6 +301,8 @@ def soft_error(text: str) -> AcpError | None:
         return AcpError("blocked by Antigravity's prompt filter: " + head[:200], "BLOCKED")
     if _VERIFY_TEXT.search(head):
         return AcpError("account must be verified with Google: " + head[:120].strip(), "VERIFY")
+    if _INDIVIDUAL_QUOTA_TEXT.search(head):
+        return AcpError("Antigravity quota reached: " + head.strip()[:200], "QUOTA", _parse_reset_seconds(head))
     m = _APIERR_TEXT.search(head)
     if m:
         msg = (m.group(1) or "agent execution terminated").strip()
@@ -255,31 +311,41 @@ def soft_error(text: str) -> AcpError | None:
         kind = classify(msg)
         return AcpError("Antigravity upstream error: " + msg[:200], "UPSTREAM_LIMIT" if kind in ("QUOTA", "RATE_LIMIT") else kind)
     if head.lstrip().startswith("⚠"):
-        # Antigravity's own status lines all start with ⚠ ("⚠ Model produced invalid output.", ...). Whatever the
-        # wording, it is not the model's answer: never hand it to the caller, try another account instead.
+        # Antigravity's own status lines all start with ⚠ ("⚠ Model produced invalid output.", "⚠ Authentication expired.", ...).
+        # Never hand them to the caller as an answer; classify known account/quota states so bad accounts cool down or disable.
         if _LICENSE_TEXT.search(head):
             return AcpError("this account has no valid Antigravity licence (#3501): " + head.strip()[:160], "LICENSE")
+        if _DISABLED_SERVICE_TEXT.search(head):
+            return AcpError("Antigravity service disabled on this account: " + head.strip()[:160], "LICENSE")
+        kind = classify(head)
+        if kind == "QUOTA":
+            return AcpError("Antigravity quota reached: " + head.strip()[:200], "QUOTA", _parse_reset_seconds(head))
+        if kind in ("AUTH", "VERIFY", "RATE_LIMIT", "BLOCKED", "UNKNOWN_MODEL"):
+            return AcpError("Antigravity status message: " + head.strip()[:200], kind)
         return AcpError("Antigravity status message instead of an answer: " + head.strip()[:200], "SERVER")
     return None
 
 
 class AcpError(Exception):
-    def __init__(self, message: str, kind: str = "SERVER"):
+    def __init__(self, message: str, kind: str = "SERVER", retry_after: float = 0.0):
         super().__init__(message)
         self.kind = kind
+        self.retry_after = retry_after
 
 
 def classify(message: str) -> str:
     m = message.lower()
     if "verify your account" in m or "verification required" in m or "not eligible for antigravity" in m:
         return "VERIFY"
+    if re.search(r"unknown model|model not found|unsupported model", m):
+        return "UNKNOWN_MODEL"
     if re.search(r"invalid prompt|invalid argument|invalid_request|bad request", m):
         return "BAD_REQUEST"   # the request itself is wrong; another account would fail the same way
-    if re.search(r"authentication required|not logged in|unauthenticated|sign in|invalid_grant|token.*(expired|revoked)", m):
+    if re.search(r"authentication (?:required|expired)|not logged in|unauthenticated|sign in|log back in|invalid_grant|token.*(expired|revoked)", m):
         return "AUTH"
     if re.search(r"model[_ -]?capacity[_ -]?exhausted|selected model is at capacity|no available (?:model )?instances", m):
         return "RATE_LIMIT"
-    if re.search(r"quota|resource.?exhausted|limit reached|exceeded your|usage limit", m):
+    if re.search(r"individual quota|quota|resource.?exhausted|limit reached|exceeded your|usage limit", m):
         return "QUOTA"
     if re.search(r"rate.?limit|429|too many requests|overloaded|capacity|unavailable|503", m):
         return "RATE_LIMIT"
@@ -631,6 +697,11 @@ class AcpProcess:
                 await asyncio.wait_for(self.proc.wait(), 10)
             except asyncio.TimeoutError:
                 self.proc.kill()
+        if self.reader_task and not self.reader_task.done():
+            try:
+                await asyncio.wait_for(self.reader_task, 2)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                pass
 
 
 @dataclass
@@ -891,13 +962,35 @@ STOP_ON_TOOLS: contextvars.ContextVar[bool] = contextvars.ContextVar("acp_stop_o
 SHARED_FALLBACK_KINDS = ("QUOTA", "RATE_LIMIT", "UPSTREAM_LIMIT", "NO_ACCOUNT", "VERIFY")
 
 
+ANTIGRAVITY_PREFIX = "antigravity/"
+
+
+def is_antigravity_model(model: Any) -> bool:
+    return isinstance(model, str) and model.lower().startswith(ANTIGRAVITY_PREFIX)
+
+
 def shared_base(model: Any) -> str:
-    """The shared model id behind "gemini-4-neon", "gemini-4-neon-high" or "aistudio/gemini-4-neon", else ""."""
-    name = str(model or "")
-    if is_studio_model(name):
-        name = name[len(STUDIO_PREFIX):]
+    """The shared model id behind "gemini-4-hydrogen", "gemini-4-hydrogen-medium", "aistudio/gemini-4-hydrogen-medium",
+    "Gemini 4 Hydrogen", etc., else ""."""
+    name = str(model or "").strip()
     base = resolve_model(name)[0] if name else ""
     return base if base in SHARED_MODELS else ""
+
+
+async def studio_can_serve(base: str, email: str = "") -> bool:
+    """Can at least one ready AI Studio account serve `base` right now (within optional pinned `email`)?"""
+    if not base or not STUDIO.configured:
+        return False
+    rows, err = await STUDIO.accounts()
+    if err:
+        return False
+    email = (email or "").strip().lower()
+    cands = [r for r in rows if r.get("ready") and (not email or str(r.get("email") or "").lower() == email)]
+    if base in STUDIO_ULTRA_ONLY:
+        cands = [r for r in cands if str((r.get("quota") or {}).get("plan") or "").lower() == "ultra"]
+    cands = [r for r in cands if not any(lim.get("model") in (base, "*")
+                                         for lim in ((r.get("quota") or {}).get("limits") or []))]
+    return bool(cands)
 
 
 def antigravity_can_serve(base: str, effort: str | None = None) -> bool:
@@ -944,29 +1037,38 @@ def _studio_body(path: str, body: dict, base: str) -> dict:
 def _studio_failed(resp: Any) -> bool:
     if resp is None or isinstance(resp, StreamingResponse):
         return resp is None
-    if resp.status_code in STUDIO_FALLBACK_STATUS:
-        return True
-    if resp.status_code == 400:     # the pinned e-mail has no AI Studio session, or it is switched off
-        try:
-            return (json.loads(resp.body).get("error") or {}).get("type") == "invalid_account"
-        except (ValueError, AttributeError):
-            return False
-    return False
+    return resp.status_code in STUDIO_FALLBACK_STATUS
 
 
 async def dispatch(path: str, body: dict, headers: Any) -> tuple[Any, dict]:
     """(response, body): a response to return as it is, or None and the body to serve on Antigravity."""
+    STUDIO_TRIED.set(False)
     model = body.get("model")
     base = shared_base(model)
     if is_studio_model(model):
-        native_base = resolve_model(str(model)[len(STUDIO_PREFIX):])[0]
-        resp = await STUDIO.forward(path, with_level(path, body, DEFAULT_LEVELS.get(native_base)), headers, pinned_email(model))
+        native_raw = str(model)[len(STUDIO_PREFIX):]
+        native_base, explicit_lv = resolve_model(native_raw)
+        eff = explicit_lv or DEFAULT_LEVELS.get(native_base)
+        resp = await STUDIO.forward(path, with_level(path, body, eff), headers, pinned_email(model))
         if base and _studio_failed(resp):
-            native = str(model)[len(STUDIO_PREFIX):]
-            event("warn", "", "%s：AI Studio 这次用不了（HTTP %s），改用 Antigravity 的同一模型 %s" % (model, getattr(resp, "status_code", "-"), native))
+            STUDIO._accounts_at = 0.0
+            ant_model = "%s-%s" % (native_base, explicit_lv) if explicit_lv else native_base
+            event("warn", "", "%s：AI Studio 这次用不了（HTTP %s），改用 Antigravity 的同一模型 %s" % (model, getattr(resp, "status_code", "-"), ant_model))
             STUDIO_TRIED.set(True)
-            return None, dict(body, model=native)
+            return None, with_level(path, dict(body, model=ant_model), eff)
         return resp, body
+    pin = PIN.get()
+    if base and STUDIO_FIRST and not is_antigravity_model(model) and STUDIO.configured and not (pin and not pin[1]):
+        if await studio_can_serve(base, pin[1] if pin else ""):
+            STUDIO_TRIED.set(True)
+            resp = await STUDIO.forward(path, _studio_body(path, body, base), headers, pin[1] if pin else "")
+            if not _studio_failed(resp) and getattr(resp, "status_code", 200) < 400:
+                return resp, body
+            STUDIO._accounts_at = 0.0
+            if isinstance(resp, StreamingResponse):
+                await resp.aclose()
+            event("warn", "", "%s：AI Studio 这次用不了（HTTP %s），改用 Antigravity 的同一模型" % (model, getattr(resp, "status_code", "-")))
+            return None, body
     if base and STUDIO.configured and not antigravity_can_serve(base, resolve_model(str(model))[1]):
         resp = await studio_takeover(path, body, headers, "Antigravity 上有这个模型的账号都在限额 / 冷却")
         if resp is not None:
@@ -980,9 +1082,12 @@ async def studio_takeover(path: str, body: dict, headers: Any, why: str) -> Any:
     pin = PIN.get()
     if not base or not STUDIO.configured or (pin and not pin[1]) or STUDIO_TRIED.get():
         return None
+    if base in STUDIO_ULTRA_ONLY and not await studio_can_serve(base, pin[1] if pin else ""):
+        return None
     STUDIO_TRIED.set(True)
     resp = await STUDIO.forward(path, _studio_body(path, body, base), headers, pin[1] if pin else "")
     if _studio_failed(resp) or resp.status_code >= 400:
+        STUDIO._accounts_at = 0.0
         if isinstance(resp, StreamingResponse):
             await resp.aclose()
         return None
@@ -1073,6 +1178,35 @@ def write_media(blocks: list[dict], req_dir: str) -> tuple[list[dict], set[str]]
     return out, allowed
 
 
+_CLEANUP_TASKS: set[asyncio.Future] = set()
+
+
+def _reap_future(f: asyncio.Future) -> None:
+    _CLEANUP_TASKS.discard(f)
+    if not f.cancelled():
+        try:
+            f.exception()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _consume_fut(f: asyncio.Future | None) -> None:
+    """Ensure a finished or cancelled Future/Task never leaks 'Task exception was never retrieved' or
+    'Task was destroyed but it is pending' when a session aborts or the client disconnects."""
+    if f is None:
+        return
+    if f.done():
+        if not f.cancelled():
+            try:
+                f.exception()
+            except Exception:  # noqa: BLE001
+                pass
+        return
+    _CLEANUP_TASKS.add(f)
+    f.add_done_callback(_reap_future)
+    f.cancel()
+
+
 async def _run_session(acp: AcpProcess, sess: dict, turn: Turn, model: str, effort: str | None, blocks: list[dict],
                        deadline: float, has_media: bool, stop_on_tools: bool | None = None) -> AsyncIterator[tuple[str, str]]:
     """model / thought level -> prompt -> stream (kind, text); auto-continues after max_tokens."""
@@ -1113,17 +1247,21 @@ async def _run_session(acp: AcpProcess, sess: dict, turn: Turn, model: str, effo
             await acp.notify("session/cancel", {"sessionId": sid})
         except Exception:  # noqa: BLE001
             pass
-        if not fut_obj.done():
-            fut_obj.cancel()
-            try:
-                await fut_obj
-            except (asyncio.CancelledError, Exception):
-                pass
+        if fut_obj.done():
+            _consume_fut(fut_obj)
+            return
+        fut_obj.cancel()
+        try:
+            await fut_obj
+        except (asyncio.CancelledError, Exception):
+            pass
 
     for i in range(MAX_CONTINUE + 1):
-        fut = asyncio.ensure_future(acp.request("session/prompt", {"sessionId": sid, "prompt": prompt}, max(5.0, deadline - time.time())))
+        # Give the inner RPC wait a +5s cushion so this outer loop owns the exact deadline without racing wait_for.
+        fut = asyncio.ensure_future(acp.request("session/prompt", {"sessionId": sid, "prompt": prompt}, max(5.0, deadline - time.time()) + 5.0))
         getter: asyncio.Future | None = None
         tool_done = False
+        normal_exit = False
         try:
             while True:
                 getter = asyncio.ensure_future(turn.queue.get())
@@ -1199,15 +1337,15 @@ async def _run_session(acp: AcpProcess, sess: dict, turn: Turn, model: str, effo
                             yield item
                         else:
                             held.append(item)
+                    normal_exit = True
                     break
                 if time.time() >= deadline:
                     await _abort_turn(fut)
                     raise AcpError("generation timed out (%.0fs)" % REQUEST_TIMEOUT, "TIMEOUT")
         finally:
-            if getter is not None and not getter.done():
-                getter.cancel()
-            if not fut.done():
-                fut.cancel()
+            _consume_fut(getter)
+            if not normal_exit or not fut.done():
+                _consume_fut(fut)
         result = fut.result()
         if held and not released:
             err = soft_error("".join(t for _k, t in held) + "\n")
@@ -1238,7 +1376,7 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
         effort = effort_override
     effort = effort or DEFAULT_LEVELS.get(model)
     wanted = frozenset((model, "%s-%s" % (model, effort)))
-    deadline = time.time() + REQUEST_TIMEOUT
+    queue_deadline = time.time() + REQUEST_TIMEOUT
     tried: set[str] = set()
     pin = PIN.get()
     if pin:    # the caller chose one account: run there or fail, never on someone else's
@@ -1248,16 +1386,17 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
         tried = {n for n in POOL.accounts if n != pin[0]}
     last: AcpError | None = None
     upstream_fails = 0
-    while time.time() < deadline:
-        acc = await POOL.acquire(tried, deadline, wanted)
+    while time.time() < queue_deadline:
+        acc = await POOL.acquire(tried, queue_deadline, wanted)
         if acc is None:
             break
         tried.add(acc.name)
         emitted = False
         tok_in = tok_out = out_chars = 0
         t0 = time.time()
+        attempt_deadline = time.time() + REQUEST_TIMEOUT
         try:
-            async for kind, text in run_on(acc, model, effort, system, blocks, deadline):
+            async for kind, text in run_on(acc, model, effort, system, blocks, attempt_deadline):
                 if kind == "text" and text:
                     emitted = True
                     out_chars += len(text)
@@ -1286,7 +1425,7 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
             if e.kind in ("QUOTA", "RATE_LIMIT", "VERIFY"):
                 acc.cooldown_kind = e.kind
             if e.kind == "QUOTA":
-                acc.cooldown_until = time.time() + COOLDOWN_QUOTA
+                acc.cooldown_until = max(acc.cooldown_until, time.time() + (e.retry_after if e.retry_after > 0 else COOLDOWN_QUOTA))
             elif e.kind == "RATE_LIMIT":
                 acc.cooldown_until = time.time() + COOLDOWN_RATE
             elif e.kind == "VERIFY":
@@ -1296,7 +1435,13 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
             elif e.kind == "CONFIG":
                 acc.disabled_reason = str(e)[:160]
             elif e.kind == "LICENSE":
-                acc.disabled_reason = "no valid Antigravity licence (#3501)"   # log in again, or replace the account
+                acc.disabled_reason = str(e)[:160] if "service disabled" in str(e).lower() else "no valid Antigravity licence (#3501)"
+            elif e.kind == "UNKNOWN_MODEL":
+                if acc.models:
+                    acc.models = [m for m in acc.models if m not in wanted]
+                if not MODEL_FALLBACK and not any(a.usable() and a.name not in tried and (not a.models or not wanted.isdisjoint(a.models))
+                                                  for a in POOL.accounts.values()):
+                    raise
             elif e.kind == "TRANSPORT" and acc.acp:
                 await acc.acp.stop()
             elif e.kind == "UPSTREAM_LIMIT":
@@ -1306,7 +1451,7 @@ async def generate(model_name: str, system: str, blocks: list[dict], effort_over
                 asyncio.create_task(quota_cooldown(acc))
                 if upstream_fails >= 2:
                     raise
-            if emitted or e.kind in ("BLOCKED", "UNKNOWN_MODEL", "BAD_REQUEST"):
+            if emitted or e.kind in ("BLOCKED", "BAD_REQUEST"):
                 raise
         finally:
             POOL.release(acc)

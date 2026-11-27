@@ -283,9 +283,9 @@ ACP 协议本身只能让 Antigravity 调用它自己那边的工具，不能把
 除了 Antigravity，网关还可以用 **Google AI Studio** 作为第二路来源，由开源项目
 [AIStudio2API](https://github.com/Mag1cFall/AIStudio2API) 提供。同一个地址、同一个密钥：
 
-- 普通模型名（如 `gemini-3.8-flash-medium`）→ Antigravity（不变）
+- 普通模型名（如 `gemini-3.8-flash-medium`、`gemini-4-hydrogen`）：在共用名单里的模型默认**优先走 AI Studio**（`AGY_STUDIO_FIRST=1`，耗尽后再自动走 Antigravity）；不在名单里的模型（如 Claude）或显式带 `antigravity/` 前缀的走 Antigravity
 - `aistudio/<模型名>`（如 `aistudio/gemini-3.8-flash`、`aistudio/gemini-4-hydrogen`）→ AI Studio，模型名原样使用，不会悄悄换成别的模型
-- **两路额度通用（1.5.5 起）**：`gemini-3.8-flash`、`gemini-4-hydrogen`、`gemini-4-neon` 两边是同一个模型。指定的那一路到了限额、冷却中或用不了时，同一个请求自动改用另一路的同一模型（`aistudio/gemini-4-neon` ↔ `gemini-4-neon`），在开始输出答案之前切换；指定了 `X-ACP-Account` 时只在这个邮箱自己的两路之间切换。名单用 `AGY_SHARED_MODELS` 改（逗号分隔，留空 = 关闭）。
+- **两路额度通用（1.5.5 起，1.5.9 默认优先 AI Studio 并统一名称）**：`gemini-3.8-flash`、`gemini-4-hydrogen`、`gemini-4-neon`、`gemini-4-carbon` 在两边都是同一个模型（不管传 `aistudio/gemini-4-neon-high`、`gemini-4-neon-high` 还是 `Gemini 4 Neon (High)` 都自动归一并保留思考档位）。优先的那一路到了限额、冷却中、缺少所需订阅档位或用不了时，同一个请求自动改用另一路的同一模型（`aistudio/gemini-4-neon` ↔ `gemini-4-neon`），在开始输出答案之前切换；指定了 `X-ACP-Account` 时只在这个邮箱自己的两路之间切换。名单用 `AGY_SHARED_MODELS` 改（逗号分隔，留空 = 关闭），想让普通模型名改回先走 Antigravity 可设 `AGY_STUDIO_FIRST=0`。
 - **默认思考档位（1.5.5 起）**：没有指定档位时，`gemini-4-neon` / `gemini-4-hydrogen` 用 `xhigh`，`gemini-3.8-flash` 用 `high`（两路一样）；模型名带档位或传了 `reasoning_effort` 时照客户端的。用 `AGY_DEFAULT_LEVELS` 改（留空 = 用模型自己的默认）。
 
 启用（需要 Docker）：

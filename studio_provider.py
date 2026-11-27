@@ -34,8 +34,31 @@ LOCALES = {'US': 'en-US', 'GB': 'en-GB', 'CA': 'en-CA', 'AU': 'en-AU', 'SG': 'en
            'DE': 'de-DE', 'FR': 'fr-FR', 'NL': 'nl-NL', 'TW': 'zh-TW', 'HK': 'zh-HK', 'KR': 'ko-KR'}
 
 
+DEFAULT_TIMEOUT = int(os.environ.get('AGY_REQUEST_TIMEOUT') or 290)
+_LEVEL_RE = re.compile(r'^(.+?)-(xhigh|high|medium|low)$', re.I)
+_GEMINI4_RE = re.compile(r'^gemini[\s_-]*4(?:\.0)?[\s_-]*(hydrogen|neon|carbon|argon)(?:[\s_-]+(xhigh|high|medium|low))?$', re.I)
+
+
 def is_studio_model(model):
-    return isinstance(model, str) and model.startswith(PREFIX)
+    return isinstance(model, str) and model.lower().startswith(PREFIX)
+
+
+def normalize_studio_model(model):
+    """Map 'aistudio/gemini-4-hydrogen-medium', 'aistudio/gemini-4-neon-xhigh', 'aistudio/gemini-4-carbon-high',
+    'aistudio/Gemini 4 Neon (High)', etc. -> ('gemini-4-<tier>', 'medium'|'high'|...)."""
+    s = (model or '').strip()
+    if s.lower().startswith(PREFIX):
+        s = s[len(PREFIX):].strip()
+    if s.lower().startswith('models/'):
+        s = s[7:].strip()
+    s = re.sub(r'\s*[（(]\s*(xhigh|high|medium|low)\s*[)）]\s*$', r'-\1', s, flags=re.I)
+    mg = _GEMINI4_RE.match(s)
+    if mg:
+        return 'gemini-4-' + mg.group(1).lower(), (mg.group(2).lower() if mg.group(2) else None)
+    ml = _LEVEL_RE.match(s)
+    if ml and ml.group(1).lower().startswith('gemini-'):
+        return ml.group(1).lower(), ml.group(2).lower()
+    return s, None
 
 
 def mask_exit(egress):
@@ -153,8 +176,10 @@ class StudioProvider:
         return bool(self.base and self.key and self.admin_password and not self.error)
 
     # ------------------------------------------------------------------ transport
-    def _client(self, timeout=290):
+    def _client(self, timeout=None):
         import httpx
+        if timeout is None:
+            timeout = DEFAULT_TIMEOUT
         return httpx.AsyncClient(base_url=self.base, timeout=httpx.Timeout(timeout, connect=10),
                                  follow_redirects=False, trust_env=False)
 
@@ -190,7 +215,7 @@ class StudioProvider:
     async def forward(self, path, body, incoming=None, email='', _retry=True):
         if not is_studio_model(body.get('model')):
             return None
-        native = body['model'][len(PREFIX):]
+        native, level = normalize_studio_model(body['model'])
         if not native:
             return self._error(400, 'AI Studio model name is empty', 'invalid_request_error')
         if path not in PATHS:
@@ -215,7 +240,12 @@ class StudioProvider:
             client = self._client()
         except ImportError:
             return self._error(503, 'AI Studio integration requires the optional httpx dependency')
-        payload = dict(body, model=native)     # AIStudio2API uses the real model id; the prefix only routes here
+        payload = dict(body, model=native)     # AIStudio2API uses the real model id; prefix and -medium/-high suffix normalized here
+        if level:
+            if path == '/v1/chat/completions':
+                payload.setdefault('reasoning_effort', level)
+            elif path == '/v1/responses':
+                payload['reasoning'] = {**(payload.get('reasoning') or {}), 'effort': (payload.get('reasoning') or {}).get('effort') or level}
         upstream, transferred = None, False
         try:
             upstream = await client.send(client.build_request('POST', path, json=payload,
@@ -234,11 +264,16 @@ class StudioProvider:
             if status >= 400 or not body.get('stream'):
                 raw = await upstream.aread()
                 if status >= 400:
+                    self._accounts_at = 0.0
                     raw = raw.replace(self.key.encode(), b'[REDACTED]')
+                    log.warning('fail provider=aistudio model=%s status=%s', native, status)
+                else:
+                    log.info('ok provider=aistudio model=%s status=%s', native, status)
                 reply = Response(raw, status_code=status, media_type=content_type, headers=headers)
                 if not (_retry and status in (403, 429, 503) and DENIED.search(raw.decode('utf-8', 'replace'))):
                     return reply
             else:
+                log.info('ok provider=aistudio model=%s stream=1 status=%s', native, status)
                 headers.update({'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
                 response = StudioStreamingResponse(upstream, client, status_code=status, media_type=content_type,
                                                    headers=headers)
